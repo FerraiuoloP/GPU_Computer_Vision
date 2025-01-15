@@ -1,0 +1,87 @@
+# Compilati binari
+*.exe
+*.out
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+
+# File di log
+*.log
+
+# File di debug e core dump
+*.dmp
+*.stackdump
+*.core
+
+# File intermedi di compilazione
+*.idb
+*.pdb
+*.ilk
+
+# File di sistema e metadati
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.Zone.Identifier
+
+# File generati da editor e IDE
+.vscode/
+.metadata/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# File di build e cartelle di output
+build/
+dist/
+bin/
+obj/
+Release/
+Debug/
+
+# File di configurazione IDE
+*.swp
+*.swo
+
+# File di configurazione CUDA
+*.cubin
+*.fatbin
+*.ptx
+
+# File generati da CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# File temporanei di esecuzione
+*.tmp
+*.temp
+*.log
+
+# File di test
+test-output/
+*.gcda
+*.gcno
+*.gcov
+
+# File relativi a MSYS2 e shell
+*.sh~
+*.bash_history
+*.bash_profile
+*.bashrc
+
+# File di sistema Windows
+*.ini
+*.bat
+*.sh
+*.cmd
+
+# Cache del compilatore
+ccache/
