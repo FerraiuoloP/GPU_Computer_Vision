@@ -11,7 +11,7 @@
 using namespace std;
 using namespace cv;
 
-void harrisCornerDetector(cv::Mat *img, float *sobel_x, float *sobel_y, int width, int height, float K, float ALPHA, float *gaussian_kernel_d, int FILTER_WIDTH)
+void harrisCornerDetector(cv::Mat *img, float *sobel_x, float *sobel_y, int width, int height, float K, float ALPHA, float *gaussian_kernel_d, int FILTER_WIDTH, bool shi_tomasi)
 {
     float *img_harris_d, *img_harris_h;
     size_t img_gray_size_h = width * height * sizeof(float);
@@ -19,7 +19,7 @@ void harrisCornerDetector(cv::Mat *img, float *sobel_x, float *sobel_y, int widt
     img_harris_h = (float *)malloc(img_gray_size_h);
     cudaMalloc(&img_harris_d, img_gray_size_h);
 
-    harrisMainKernelWrap(sobel_x, sobel_y, img_harris_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH);
+    harrisMainKernelWrap(sobel_x, sobel_y, img_harris_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
 
     // harris to host
     cudaMemcpy(img_harris_h, img_harris_d, img_gray_size_h, cudaMemcpyDeviceToHost);

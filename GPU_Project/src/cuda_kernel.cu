@@ -865,7 +865,7 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
     cudaFree(tts_img);
     free(img_debug);
 }
-void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size)
+void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
@@ -938,11 +938,17 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     // 4. Compute trace(M) = Ix2 + Iy2
     vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
 
-    // 5. Compute response R = det(M) / trace(M)
-    vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output, width, height);
-
-    // 5b. Compute the Shi-Tomasi response
-    // computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output, width, height);
+    if (!shi_tomasi)
+    {
+        // 5. Compute response R = det(M) / trace(M)
+        vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output, width, height);
+    }
+    else
+    {
+        // 5b. Compute the Shi-Tomasi response
+        cout << "Shi-Tomasi response" << endl;
+        computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output, width, height);
+    }
 
     // 6. Non-maximum suppression on the Harris response
     cudaEventRecord(start);

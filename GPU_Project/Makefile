@@ -20,7 +20,7 @@ $(OUTPUT_FILE): $(SOURCE_FILES)
 
 # Run the program
 run: $(OUTPUT_FILE)
-	./$(OUTPUT_FILE)
+	./$(OUTPUT_FILE) $$ARGS
 
 # Set the MAIN to main_cpu.cpp for all_run_cpu
 run_cpu: 

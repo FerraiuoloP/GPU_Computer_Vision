@@ -8,7 +8,7 @@ void rgbToGrayKernelWrap(unsigned char *img_d, float *gray_d, int N, int M);
 void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size);
 void harrisCornerKernelWrap(float *img_sobel_x, float *img_sobel_y, float *img_harris, int width, int height, float k);
 void mapKernelToRGBWrap(float *img_harris, unsigned char *img_harris_rgb, int width, int height);
-void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size);
+void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi);
 void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float low_threshold, float high_threshold, float *gaussian_kernel, int g_kernel_size);
 void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel);
 int otsu_threshold(float *image, int width, int height);
