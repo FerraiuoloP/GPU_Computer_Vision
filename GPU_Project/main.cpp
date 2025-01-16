@@ -208,7 +208,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	free(gaussian_kernel);
 	free(img_h);
 }
-void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold)
+void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
 {
 	cv::VideoCapture cap(filename);
 	if (!cap.isOpened())
@@ -227,8 +227,36 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 		{
 			break;
 		}
-
-		handle_image(mode, filename, low_threshold, high_threshold, true, img);
+		if (is_all_thread)
+		{
+			cv::Mat img2 = img.clone();
+			cv::Mat img3 = img.clone();
+			std::thread t1(
+				[img](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold, true, img);
+				},
+				HARRIS, filename, low_threshold, high_threshold);
+			std::thread t2(
+				[img2](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold, true, img2);
+				},
+				CANNY, filename, low_threshold, high_threshold);
+			std::thread t3(
+				[img3](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold, true, img3);
+				},
+				OTSU_BIN, filename, low_threshold, high_threshold);
+			t1.join();
+			t2.join();
+			t3.join();
+		}
+		else
+		{
+			handle_image(mode, filename, low_threshold, high_threshold, true, img);
+		}
 
 		int64 end_time = cv::getTickCount();
 		double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
@@ -389,52 +417,12 @@ int main(const int argc, const char **argv)
 	{
 		if (is_video)
 		{
-			std::thread t1(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_video(mode, filename, low_threshold, high_threshold);
-				},
-				HARRIS, filename, low_threshold, high_threshold);
-			std::thread t2(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_video(mode, filename, low_threshold, high_threshold);
-				},
-				CANNY, filename, low_threshold, high_threshold);
-			std::thread t3(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_video(mode, filename, low_threshold, high_threshold);
-				},
-				OTSU_BIN, filename, low_threshold, high_threshold);
-			t1.join();
-			t2.join();
-			t3.join();
+			handle_video(HARRIS, filename, low_threshold, high_threshold, true);
 		}
 		else
 		{
-			std::thread t1(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_image(mode, filename, low_threshold, high_threshold);
-				},
-				HARRIS, filename, low_threshold, high_threshold);
-			std::thread t2(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_image(mode, filename, low_threshold, high_threshold);
-				},
-				CANNY, filename, low_threshold, high_threshold);
-
-			std::thread t3(
-				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handle_image(mode, filename, low_threshold, high_threshold);
-				},
-				OTSU_BIN, filename, low_threshold, high_threshold);
-			t1.join();
-			t2.join();
-			t3.join();
+			fprintf(stderr, "All mode is only supported for videos. Usage: %s -A -f=filename\n", argv[0]);
+			return -1;
 		}
 	}
 	else

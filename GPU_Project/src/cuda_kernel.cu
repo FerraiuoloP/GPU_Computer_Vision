@@ -816,14 +816,17 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
 {
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    size_t img_size = width * height * sizeof(float);
     float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug;
-    img_debug = (float *)malloc(width * height * sizeof(float));
+    float *output_d;
+    img_debug = (float *)malloc(img_size);
 
     // cudamallocs
-    cudaMalloc(&img_sobel, width * height * sizeof(float));
-    cudaMalloc(&sobel_directions, width * height * sizeof(float));
-    cudaMalloc(&lbcs_img, width * height * sizeof(float));
-    cudaMalloc(&tts_img, width * height * sizeof(float));
+    cudaMalloc(&img_sobel, img_size);
+    cudaMalloc(&sobel_directions, img_size);
+    cudaMalloc(&lbcs_img, img_size);
+    cudaMalloc(&tts_img, img_size);
+    cudaMalloc(&output_d, img_size);
 
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
 
@@ -859,6 +862,7 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
     cudaEventElapsedTime(&milliseconds2, start2, stop2);
     // printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
 
+    cudaFree(output_d);
     cudaFree(img_sobel);
     cudaFree(sobel_directions);
     cudaFree(lbcs_img);
