@@ -141,11 +141,10 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		// cannyEdgeDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_MANUAL:
-		cannyEdgeDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_GUI:
 	{
@@ -156,7 +155,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		cv::createTrackbar("Threshold Low", "Output Image", &thresh_l, 255);
 		while (true)
 		{
-			cannyEdgeDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
+			cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
 			cv::imshow("Output Image", img);
 			if (cv::waitKey(1) == 27) // wait to press 'esc' key
 			{
@@ -171,27 +170,31 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		break;
 	}
 
-	cv::Mat img_out;
-	// Since otsu binarization is done on the grayscale image, we need to convert it to 8UC1(8 unsigned char 1 channel) before displaying
-	if (mode == OTSU_BIN)
-	{
-		img_out = cv::Mat(height, width, CV_8UC1, img.data);
-	}
-	else
-	{
-		img_out = cv::Mat(height, width, CV_8UC3, img.data);
-	}
-	string window_name = "Output Image " + to_string(mode);
-	cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
-	cv::imshow(window_name, img_out);
-
-	// If not from video, wait for key press
-	if (!from_video)
+	if (mode != CANNY_GUI)
 	{
 
-		cv::waitKey(0);
+		cv::Mat img_out;
+		// Since otsu binarization is done on the grayscale image, we need to convert it to 8UC1(8 unsigned char 1 channel) before displaying
+		if (mode == OTSU_BIN)
+		{
+			img_out = cv::Mat(height, width, CV_8UC1, img.data);
+		}
+		else
+		{
+			img_out = cv::Mat(height, width, CV_8UC3, img.data);
+		}
+		string window_name = "Output Image " + to_string(mode);
+		cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
+		cv::imshow(window_name, img_out);
+
+		// If not from video, wait for key press
+		if (!from_video)
+		{
+
+			cv::waitKey(0);
+		}
+		img.release();
 	}
-	img.release();
 
 	// (cuda)memory deallocations
 	cudaFree(img_d);

@@ -967,23 +967,23 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     // Synchronize streams
     cudaDeviceSynchronize();
 
-    // 3. Compute det(M) = Ix2 * Iy2 - (IxIy)^2
-    vecMul<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, IxIy_d2, width, height); // (IxIy)^2
-    vecMul<<<gridSize, blockSize, 0, streams[1]>>>(Ix2_d, Iy2_d, detM_d, width, height);    // Ix2 * Iy2
-    vecSub<<<gridSize, blockSize>>>(detM_d, IxIy_d2, detM_d, width, height);                // det(M)
-
-    // 4. Compute trace(M) = Ix2 + Iy2
-    vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
-
     if (!shi_tomasi)
     {
+
+        // 3. Compute det(M) = Ix2 * Iy2 - (IxIy)^2
+        vecMul<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, IxIy_d2, width, height); // (IxIy)^2
+        vecMul<<<gridSize, blockSize, 0, streams[1]>>>(Ix2_d, Iy2_d, detM_d, width, height);    // Ix2 * Iy2
+        vecSub<<<gridSize, blockSize>>>(detM_d, IxIy_d2, detM_d, width, height);                // det(M)
+
+        // 4. Compute trace(M) = Ix2 + Iy2
+        vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
+
         // 5. Compute response R = det(M) / trace(M)
         vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output, width, height);
     }
     else
     {
-        // 5b. Compute the Shi-Tomasi response
-        cout << "Shi-Tomasi response" << endl;
+        // 5b. Compute the Shi-Tomasi response. R =  min(trace / 2 + sqrtf(trace * trace / 4 - determinant), trace / 2 . sqrtf(trace * trace / 4 - determinant))
         computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output, width, height);
     }
 
