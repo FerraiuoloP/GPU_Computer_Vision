@@ -4,6 +4,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <iostream>
+#include <thread>
 #include <cuda_runtime.h>
 #include "include/cuda_kernel.cuh"
 #include "include/utils.h"
@@ -22,12 +23,14 @@ enum Mode
 	SHI_TOMASI,
 	// -C. Canny Edge Detection with Otsu Thresholding
 	CANNY,
-	// Canny Edge Detection with manual thresholding. Optional -l and -h flags
+	// -C -l=low -h=high. Canny Edge Detection with manual thresholding. Optional
 	CANNY_MANUAL,
-	// Canny Edge Detection with GUI thresholding. Optional -G flag
+	// -C -g. Canny Edge Detection with GUI thresholding. Optional
 	CANNY_GUI,
-	// -O. Otsu thresholding for image binarization
-	OTSU_BIN
+	// -O. Otsu thresholding method for image binarization
+	OTSU_BIN,
+	// -A. All at once
+	ALL
 };
 
 void save_image(float *img_d, size_t img_size_h, int height, int width, std::string filename)
@@ -130,7 +133,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	switch (mode)
 	{
 	case HARRIS:
-		harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH);
+		harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
 		break;
 	case SHI_TOMASI:
 		harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
@@ -177,8 +180,9 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	{
 		img_out = cv::Mat(height, width, CV_8UC3, img.data);
 	}
+	string window_name = "Output Image " + to_string(mode);
 	cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
-	cv::imshow("Output Image", img_out);
+	cv::imshow(window_name, img_out);
 
 	// If not from video, wait for key press
 	if (!from_video)
@@ -263,6 +267,10 @@ int main(const int argc, const char **argv)
 	{
 		mode = SHI_TOMASI;
 	}
+	else if (strcmp(argv[1], "-A") == 0)
+	{
+		mode = ALL;
+	}
 	else
 	{
 		fprintf(stderr, "No execution mode specified. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
@@ -304,7 +312,7 @@ int main(const int argc, const char **argv)
 		if (mode == CANNY)
 		{
 			std::string arg = argv[3];
-			if (arg == "-G")
+			if (arg == "-g")
 			{
 				if (is_video)
 				{
@@ -377,16 +385,70 @@ int main(const int argc, const char **argv)
 			fprintf(stderr, "Too many arguments for the specified mode. Ignoring extra arguments.\n");
 		}
 	}
-
-	// Actual driver code
-	if (is_video)
+	if (mode == ALL)
 	{
-		handle_video(mode, filename, low_threshold, high_threshold);
+		if (is_video)
+		{
+			std::thread t1(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_video(mode, filename, low_threshold, high_threshold);
+				},
+				HARRIS, filename, low_threshold, high_threshold);
+			std::thread t2(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_video(mode, filename, low_threshold, high_threshold);
+				},
+				CANNY, filename, low_threshold, high_threshold);
+			std::thread t3(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_video(mode, filename, low_threshold, high_threshold);
+				},
+				OTSU_BIN, filename, low_threshold, high_threshold);
+			t1.join();
+			t2.join();
+			t3.join();
+		}
+		else
+		{
+			std::thread t1(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold);
+				},
+				HARRIS, filename, low_threshold, high_threshold);
+			std::thread t2(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold);
+				},
+				CANNY, filename, low_threshold, high_threshold);
+
+			std::thread t3(
+				[](Mode mode, std::string filename, int low_threshold, int high_threshold)
+				{
+					handle_image(mode, filename, low_threshold, high_threshold);
+				},
+				OTSU_BIN, filename, low_threshold, high_threshold);
+			t1.join();
+			t2.join();
+			t3.join();
+		}
 	}
 	else
 	{
-		handle_image(mode, filename, low_threshold, high_threshold);
+		if (is_video)
+		{
+			handle_video(mode, filename, low_threshold, high_threshold);
+		}
+		else
+		{
+			handle_image(mode, filename, low_threshold, high_threshold);
+		}
 	}
+	// Actual driver code
 	return 0;
 }
 // g++ -std=c++11 -IC:C:\opencv\opencv\build\include  -LC:C:\opencv\opencv\build\x64\vc15\lib -lopencv_core470 -lopencv_highgui470 -lopencv_imgcodecs470 -lopencv_imgproc470 -o my_program.exe main.cpp
