@@ -162,12 +162,24 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		break;
 	}
 	case OTSU_BIN:
+		int threshold = otsu_threshold(img_gray_d, width, height);
+		binarize_img_wrapper(img.data, img_gray_d, width, height, threshold);
 		break;
 	}
 
-	// Output image
-	cv::cvtColor(img, img, cv::COLOR_RGB2BGR);
-	cv::imshow("Output Image", img);
+	cv::Mat img_out;
+	// Since otsu binarization is done on the grayscale image, we need to convert it to 8UC1(8 unsigned char 1 channel) before displaying
+	if (mode == OTSU_BIN)
+	{
+		img_out = cv::Mat(height, width, CV_8UC1, img.data);
+	}
+	else
+	{
+		img_out = cv::Mat(height, width, CV_8UC3, img.data);
+	}
+	cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
+	cv::imshow("Output Image", img_out);
+
 	// If not from video, wait for key press
 	if (!from_video)
 	{

@@ -13,5 +13,6 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
 void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel);
 int otsu_threshold(float *image, int width, int height);
 void binarize_img(float *img_d, float *img_h, int width, int height);
+void binarize_img_wrapper(unsigned char *img_h, float *img_d, int width, int height, int threshold);
 void convolutionGPU2Wrap(float *img_input_d, float *mask, float *P, int channels, int width, int height);
 void findMaxWrap(int *arr_d, int *arr_d_o, int size);

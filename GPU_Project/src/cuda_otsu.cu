@@ -140,6 +140,31 @@ __global__ void find_max_reduction(int *sigma2_b, int *max_threshold, int width,
     }
 }
 
+__global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int width, int height, int threshold)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x < width && y < height)
+    {
+        int idx = x * height + y;
+        output_d[idx] = (unsigned char)(img_d[idx] > threshold ? 255 : 0);
+    }
+}
+
+void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, int height, int threshold)
+{
+    unsigned char *output_d;
+    size_t img_size = width * height;
+    const dim3 blockSize(16, 16);
+    const dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
+
+    cudaMalloc(&output_d, img_size * sizeof(unsigned char));
+
+    binarize_img_kernel<<<gridSize, blockSize>>>(output_d, img_d, width, height, threshold);
+
+    cudaMemcpy(img_gray_h, output_d, img_size * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    cudaFree(output_d);
+}
 /**
  * @brief Compute the Otsu threshold of the image.
  *
