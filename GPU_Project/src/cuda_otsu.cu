@@ -113,7 +113,15 @@ __global__ void otsu_threshold_kernel(float *image, int *histogram, float *proba
         sigma2_b[index] = (int)var;
     }
 }
-
+/**
+ * @brief Find the maximum value in the array of sigma2_b.
+ *
+ * @param sigma2_b The array of sigma2_b.
+ * @param max_threshold The maximum threshold for which the sigma2_b is maximum.
+ * @param width The width of the image.
+ * @param height The height of the image.
+ * @return __global__
+ */
 __global__ void find_max_reduction(int *sigma2_b, int *max_threshold, int width, int height)
 {
     __shared__ int sigma2b_shared[256];

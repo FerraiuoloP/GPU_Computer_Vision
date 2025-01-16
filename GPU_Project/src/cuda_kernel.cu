@@ -1,5 +1,6 @@
 #define DEBUG
 
+#include <cfloat>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -92,6 +93,119 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
             }
         }
         corners_output[idx] = (harris_map[idx] == max_val) ? harris_map[idx] : 0.0f;
+    }
+}
+
+/**
+ * @brief warp-level reduction exploiting shfl intrinsic
+ * @param val value to be reduced that is passed between threads withing same warp
+ * @return __device__
+ */
+__device__ float warpReduceMax(float val)
+{
+    // max-reduction using shfl_down
+    for (int offset = 16; offset > 0; offset /= 2)
+    {
+        val = max(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
+    }
+    return val;
+}
+
+#define THREADS_PER_BLOCK 1024
+
+/**
+ * @brief Block-level reduction to find the maximum value
+ *
+ * @param val value to be max-reduced
+ * @return __device__
+ */
+__device__ float blockReduceMax(float val)
+{
+    //
+    __shared__ float shared[THREADS_PER_BLOCK / 32]; // Shared memory for warp-level results
+    int tid = threadIdx.x + threadIdx.y * blockDim.x;
+
+    int lane = tid % 32;   // Lane(aka thread) index in the warp
+    int warpId = tid / 32; // Warp index within the block
+
+    val = warpReduceMax(val);
+
+    // writing max value of the warp to shared memory
+    if (lane == 0)
+    {
+        shared[warpId] = val;
+    }
+
+    __syncthreads(); // making sure every warps computed their max value and wrote it to shared memory
+
+    // Only the first warp performs the final reduction
+    if (warpId == 0)
+    {
+        val = (tid < blockDim.x * blockDim.y / 32) ? shared[lane] : -FLT_MAX;
+        val = warpReduceMax(val);
+    }
+
+    return val;
+}
+/**
+ * @brief custom atomicMax implementation since there isn't an overloaded one with float values
+ *
+ * @see https://stackoverflow.com/questions/17399119/how-do-i-use-atomicmax-on-floating-point-values-in-cuda
+ * @param address Address of the value to be updated
+ * @param val Value to be compared with the current value
+ * @return __device__
+ */
+__device__ static float atomicMax(float *address, float val)
+{
+    int *address_as_i = (int *)address;
+    int old = *address_as_i, assumed;
+    do
+    {
+        assumed = old;
+        old = ::atomicCAS(address_as_i, assumed,
+                          __float_as_int(::fmaxf(val, __int_as_float(assumed))));
+    } while (assumed != old);
+    return __int_as_float(old);
+}
+
+/**
+ * @brief Fast max reduction exploiting cuda shfl intrinsics.
+ *
+ * @param img Input image
+ * @param max_value Final max value
+ * @param width Width of the image
+ * @param height Height of the image
+ * @return __global__
+ */
+__global__ void find_max_reduction(float *img, float *max_value, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    // Compute linear thread index for stride
+    int stride_x = gridDim.x * blockDim.x;
+    int stride_y = gridDim.y * blockDim.y;
+
+    float local_max = -FLT_MAX;
+
+    // Process all elements assigned to this thread with strided access
+    for (int j = y; j < height; j += stride_y)
+    {
+        for (int i = x; i < width; i += stride_x)
+        {
+            int idx = j * width + i;
+            local_max = max(local_max, img[idx]);
+        }
+    }
+
+    // Block-level reduction to find max value
+    float block_max = blockReduceMax(local_max);
+
+    // Max value found by using custom atomic max operation
+    if (threadIdx.x == 0 && threadIdx.y == 0)
+    {
+        atomicMax(max_value, block_max);
+        // max_value[0] = atomicMax(max_value, block_max);
     }
 }
 
@@ -906,7 +1020,9 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
 {
     int n = width * height;
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
-    // cudaStream_t stream1, stream2, stream3;
+    float *output_d;
+    float *max_value_d;
+    float max_value_f = -FLT_MAX;
     cudaStream_t streams[3];
     cudaEvent_t start, stop;
     float milliseconds = 0;
@@ -929,6 +1045,10 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaMalloc(&IxIy_d2, n * sizeof(float));
     cudaMalloc(&detM_d, n * sizeof(float));
     cudaMalloc(&traceM_d, n * sizeof(float));
+    cudaMalloc(&output_d, n * sizeof(float));
+    cudaMalloc(&max_value_d, sizeof(float));
+
+    cudaMemcpy(max_value_d, &max_value_f, sizeof(float), cudaMemcpyHostToDevice);
 
     // Create CUDA streams
     cudaStreamCreate(&streams[0]);
@@ -979,21 +1099,42 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
         vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
 
         // 5. Compute response R = det(M) / trace(M)
-        vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output, width, height);
+        vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output_d, width, height);
     }
     else
     {
         // 5b. Compute the Shi-Tomasi response. R =  min(trace / 2 + sqrtf(trace * trace / 4 - determinant), trace / 2 . sqrtf(trace * trace / 4 - determinant))
-        computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output, width, height);
+        computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output_d, width, height);
     }
 
     // 6. Non-maximum suppression on the Harris response
     cudaEventRecord(start);
-    nonMaximumSuppression<<<gridSize, blockSize>>>(output, output, width, height, g_kernel_size);
+    nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Elapsed time for NMS: %f ms\n", milliseconds);
+
+    size_t sh_mem_size = blockSize.x * blockSize.y * sizeof(float);
+
+    // 7. Finding Max value in Harris response
+    cudaEventRecord(start);
+
+    find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Elapsed time for Max value: %f ms\n", milliseconds);
+
+    // debug only
+    cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
+    printf("Max value in Harris response: %f\n", max_value_f);
+
+    // 8. Corner thresholding
+    // TODO
+
+    // TODO: Remove when harrisCornerDetector in edge_detection.cpp has been removed
+    cudaMemcpy(output, output_d, n * sizeof(float), cudaMemcpyDeviceToDevice);
 
     // Cleanup
     cudaFree(Ix2_d);
@@ -1002,15 +1143,9 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaFree(IxIy_d2);
     cudaFree(detM_d);
     cudaFree(traceM_d);
+    cudaFree(output_d);
 
     cudaStreamDestroy(streams[0]);
     cudaStreamDestroy(streams[1]);
     cudaStreamDestroy(streams[2]);
-
-    // Error check (optional, for debugging purposes)
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-    {
-        printf("CUDA Error: %s\n", cudaGetErrorString(err));
-    }
 }
