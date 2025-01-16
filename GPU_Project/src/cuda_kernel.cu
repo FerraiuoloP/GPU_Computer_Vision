@@ -104,7 +104,7 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
 __device__ float warpReduceMax(float val)
 {
     // max-reduction using shfl_down
-    for (int offset = 16; offset > 0; offset /= 2)
+    for (int offset = warpSize / 2; offset > 0; offset /= 2)
     {
         val = max(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
     }
@@ -125,8 +125,8 @@ __device__ float blockReduceMax(float val)
     __shared__ float shared[THREADS_PER_BLOCK / 32]; // Shared memory for warp-level results
     int tid = threadIdx.x + threadIdx.y * blockDim.x;
 
-    int lane = tid % 32;   // Lane(aka thread) index in the warp
-    int warpId = tid / 32; // Warp index within the block
+    int lane = tid % warpSize;   // Lane(aka thread) index in the warp
+    int warpId = tid / warpSize; // Warp index within the block
 
     val = warpReduceMax(val);
 

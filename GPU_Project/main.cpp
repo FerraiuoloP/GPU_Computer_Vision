@@ -75,6 +75,8 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	size_t img_size_h = width * height * channels * sizeof(unsigned char);
 	size_t img_gray_size_h = width * height * sizeof(float);
 
+	printf("Image size: %d x %d \n", width, height);
+
 	// device variable declarations
 	unsigned char *img_d;
 	float *img_gray_d;
