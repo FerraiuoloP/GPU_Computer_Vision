@@ -22,19 +22,51 @@ inline cudaError_t checkCuda(cudaError_t result)
     return result;
 }
 
-__global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int N, int M)
+/**
+ * @brief Kernel that convers a RGB image to a Grayscale image
+ *
+ * @param img_d Source RGB image
+ * @param gray_d  Destination Grayscale image
+ * @param N
+ * @param M
+ * @return __global__
+ */
+__global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int width, int height)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < N && j < M)
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x < width && y < height)
     {
-        int idx = i * M + j;
+        int idx = x * height + y;
         int idx2 = 3 * idx;
         float r = (float)(img_d[idx2]) * 0.299;
         float g = (float)(img_d[idx2 + 1]) * 0.587;
         float b = (float)(img_d[idx2 + 2]) * 0.114;
 
         gray_d[idx] = (r + g + b);
+    }
+}
+
+/**
+ * @brief Utility kernel to copy a 1 channel image to a 3 channel image.
+ *
+ * @param src_img_d The source 1 channel image
+ * @param dst_img_d The destination 3 channel image
+ * @param width Width of the image
+ * @param height Width of the image
+ * @return __global__
+ */
+__global__ void copy1ChannelTo3(float *src_img_d, unsigned char *dst_img_d, int width, int height)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < width && j < height)
+    {
+        int idx = i * height + j;
+        int idx2 = 3 * idx;
+        dst_img_d[idx2] = (unsigned char)src_img_d[idx];
+        dst_img_d[idx2 + 1] = (unsigned char)src_img_d[idx];
+        dst_img_d[idx2 + 2] = (unsigned char)src_img_d[idx];
     }
 }
 
@@ -63,6 +95,17 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
     }
 }
 
+/**
+ * @brief Non maximum suppression kernel. It compares the current pixel with its neighbours in a window of size window_size x window_size.
+ * If the current pixel is not the maximum, it is set to 0.
+ *
+ * @param harris_map Harris response map
+ * @param corners_output Output image
+ * @param N Width of the image
+ * @param M Height of the image
+ * @param window_size
+ * @return __global__
+ */
 __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, int N, int M, int window_size)
 {
     // Shared memory for the tile and its border
@@ -116,12 +159,22 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
     }
 }
 
+/**
+ * @brief Fast Convolution kernel with shared memory. It computes the convolution of an image with a given kernel
+ *
+ * @param result_d Output image
+ * @param data_d Input image
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param kernel_d Convolution kernel
+ * @return __global__
+ */
 __global__ void convolutionGPU(
-    float *d_Result,
-    float *d_Data,
-    int dataW,
-    int dataH,
-    float *d_Kernel)
+    float *result_d,
+    float *data_d,
+    int width,
+    int height,
+    float *kernel_d)
 {
     // Shared memory for the tile and its border
     __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
@@ -129,7 +182,7 @@ __global__ void convolutionGPU(
     // Calculate global memory location of this thread
     const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
     const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
-    const int gLoc = x0 + y0 * dataW;
+    const int gLoc = x0 + y0 * width;
 
     // Load corners into shared memory
     if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
@@ -137,28 +190,28 @@ __global__ void convolutionGPU(
         // Top-left corner
         int x = x0 - 1;
         int y = y0 - 1;
-        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? d_Data[x + y * dataW] : 0.0f;
+        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
 
         // Top-right corner
         x = x0 + 1;
         y = y0 - 1;
-        data[threadIdx.y][threadIdx.x + 2] = (x < dataW && y >= 0) ? d_Data[x + y * dataW] : 0.0f;
+        data[threadIdx.y][threadIdx.x + 2] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
 
         // Bottom-left corner
         x = x0 - 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < dataH) ? d_Data[x + y * dataW] : 0.0f;
+        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
 
         // Bottom-right corner
         x = x0 + 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x + 2] = (x < dataW && y < dataH) ? d_Data[x + y * dataW] : 0.0f;
+        data[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
     }
 
     __syncthreads();
 
     // Perform convolution
-    if (x0 < dataW && y0 < dataH)
+    if (x0 < width && y0 < height)
     {
         float sum = 0.0f;
         for (int i = -1; i <= 1; ++i)
@@ -166,13 +219,22 @@ __global__ void convolutionGPU(
             for (int j = -1; j <= 1; ++j)
             {
                 sum += data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] *
-                       d_Kernel[(i + 1) * 3 + (j + 1)];
+                       kernel_d[(i + 1) * 3 + (j + 1)];
             }
         }
-        d_Result[gLoc] = sum;
+        result_d[gLoc] = sum;
     }
 }
-
+/**
+ * @brief Vector addition kernel. It computes the element-wise addition of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
 __global__ void vecAdd(float *A, float *B, float *C, int M, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -184,6 +246,16 @@ __global__ void vecAdd(float *A, float *B, float *C, int M, int N)
     }
 }
 
+/**
+ * @brief Vector multiplication kernel. It computes the element-wise multiplication of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
 __global__ void vecMul(float *A, float *B, float *C, int M, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -194,7 +266,16 @@ __global__ void vecMul(float *A, float *B, float *C, int M, int N)
         C[idx] = A[idx] * B[idx];
     }
 }
-
+/**
+ * @brief Vector subtraction kernel. It computes the element-wise subtraction of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
 __global__ void vecSub(float *A, float *B, float *C, int M, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -205,7 +286,16 @@ __global__ void vecSub(float *A, float *B, float *C, int M, int N)
         C[idx] = A[idx] - B[idx];
     }
 }
-
+/**
+ * @brief Vector division kernel. It computes the element-wise division of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
 __global__ void vecDiv(float *A, float *B, float *C, int M, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -224,14 +314,24 @@ __global__ void vecDiv(float *A, float *B, float *C, int M, int N)
     }
 }
 
-// N = width, M = height
-__global__ void computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int M, int N)
+/**
+ * @brief Kernel that computes Shi-Tommasi response for each pixel in the image: response=min(lambda1, lambda2) where lambda1 and lambda2 are the eigenvalues of the structure tensor.
+ *
+ * @param Ixx Squared gradient in x direction
+ * @param Iyy Squared gradient in y direction
+ * @param Ixy Product of the gradients(x and y direction)
+ * @param corners_output Output image containing the Shi-Tommasi response for each pixel
+ * @param width Width of the image
+ * @param height Height of the image
+ * @return __global__
+ */
+__global__ void computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x < width && y < height)
     {
-        int idx = j * M + i;
+        int idx = y * width + x;
         float A = Ixx[idx];
         float B = Ixy[idx];
         float C = Iyy[idx];
@@ -247,6 +347,16 @@ __global__ void computeShiTommasiResponse(const float *Ixx, const float *Iyy, co
     }
 }
 
+/**
+ * @brief Utility kernel that suppress a pixel if it's lower than a given threshold.
+ *
+ * @param harris_map
+ * @param corners_output
+ * @param N
+ * @param M
+ * @param threshold
+ * @return __global__
+ */
 __global__ void applyThreshold(const float *harris_map, float *corners_output, int N, int M, float threshold)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -310,6 +420,18 @@ __global__ void combineGradientsKernel(float *img_sobel_x, float *img_sobel_y, f
     }
 }
 
+/**
+ * @brief Compute a non maximum suppression on the gradient magnitude image. Each pixel is compared with its neighbors in the direction of the gradient. If the pixel is not the maximum, it is set to 0.
+ * @cite https://en.wikipedia.org/wiki/Canny_edge_detector#Gradient_magnitude_thresholding_or_lower_bound_cut-off_suppression for further details.
+ * @param img_magn_gradient Image containing the magnitude of the gradient for each pixel.
+ * @param img_dir_gradient Image containing the direction of the gradient for each pixel.
+ * @param img_output Image containing the non maximum suppressed gradient magnitude.
+ * @param width width of the image.
+ * @param height height of the image.
+ * @param low_th Lower threshold for the double thresholding.
+ * @param high_th Higher threshold for the double thresholding.
+ * @return __global__
+ */
 __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *img_dir_gradient, float *img_output, int width, int height)
 {
     int x0 = blockIdx.x * blockDim.x + threadIdx.x;
@@ -407,7 +529,6 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
  * @param low_th Lower threshold for the double thresholding.
  * @param high_th Higher threshold for the double thresholding.
  * @return __global__
- * TODO: sharedify
  */
 __global__ void lowerBoundCutoffSuppression(float *img_magn_gradient, float *img_dir_gradient, float *img_output, int width, int height)
 {
@@ -639,102 +760,6 @@ __global__ void hysteresis(float *TTS_img, int width, int height)
     }
 }
 
-// __global__ void hysteresis(float *TTS_img, int width, int height)
-// {
-//     __shared__ float data[TILE_WIDTH + FILTER_WIDTH/2 *2][TILE_WIDTH + FILTER_WIDTH/2 *2];
-
-//     const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
-//     const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
-//     const int gLoc = x0 + y0 * width;
-
-//     // Load corners into shared memory
-//     if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
-//     {
-//         //load itself
-//         data[threadIdx.y+1][threadIdx.x+1] = TTS_img[gLoc];
-
-//         if(threadIdx.x ==0){
-//             //load left halo
-//             data[threadIdx.y][0] = (x0-1 >= 0) ? TTS_img[gLoc-1] : 0.0f;
-//         }
-//         if(threadIdx.x == TILE_WIDTH-1){
-//             //load right halo
-//             data[threadIdx.y][TILE_WIDTH+1] = (x0+1 < width) ? TTS_img[gLoc+1] : 0.0f;
-//         }
-//         if(threadIdx.y == 0){
-//             //load top halo
-//             data[0][threadIdx.x] = (y0-1 >= 0) ? TTS_img[gLoc-width] : 0.0f;
-//         }
-//         if(threadIdx.y == TILE_WIDTH-1){
-//             //load bottom halo
-//             data[TILE_WIDTH+1][threadIdx.x] = (y0+1 < height) ? TTS_img[gLoc+width] : 0.0f;
-//         }
-//         // Top-left corner
-//         if(threadIdx.x == 0 && threadIdx.y == 0){
-//             data[0][0] = (x0-1 >= 0 && y0-1 >= 0) ? TTS_img[gLoc-width-1] : 0.0f;
-//         }
-//         // Top-right corner
-//         if(threadIdx.x == TILE_WIDTH-1 && threadIdx.y == 0){
-//             data[0][TILE_WIDTH+1] = (x0+1 < width && y0-1 >= 0) ? TTS_img[gLoc-width+1] : 0.0f;
-//         }
-//         // Bottom-left corner
-//         if(threadIdx.x == 0 && threadIdx.y == TILE_WIDTH-1){
-//             data[TILE_WIDTH+1][0] = (x0-1 >= 0 && y0+1 < height) ? TTS_img[gLoc+width-1] : 0.0f;
-//         }
-//         // Bottom-right corner
-//         if(threadIdx.x == TILE_WIDTH-1 && threadIdx.y == TILE_WIDTH-1){
-//             data[TILE_WIDTH+1][TILE_WIDTH+1] = (x0+1 < width && y0+1 < height) ? TTS_img[gLoc+width+1] : 0.0f;
-//         }
-
-//     }
-
-//     __syncthreads();
-//     float tts_val = 0.0f;
-//     if (x0 < width - 1 && y0 < height - 1)
-//     {
-//         if (data[threadIdx.y + 1][threadIdx.x + 1] >= 255.0f)
-//         {
-
-//             tts_val=255.0f;
-//         }
-//         else if (data[threadIdx.y + 1][threadIdx.x + 1] >= 128.0f)
-//         {
-//             bool is_connected_to_strong = false;
-
-//             // Perform convolution
-//             if (x0 < width && y0 < height)
-//             {
-//                 bool is_connected_to_strong = false;
-//                 for (int i = -1; i <= 1 && !is_connected_to_strong; ++i)
-//                 {
-//                     for (int j = -1; j <= 1; ++j)
-//                     {
-//                         int neighbour_idx = (threadIdx.y + 1 + i) * width + (threadIdx.x + 1 + j);
-//                         if (neighbour_idx >= 0 && neighbour_idx < width * height && data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] >= 255.0f)
-//                         {
-//                             is_connected_to_strong = true;
-//                             break;
-//                         }
-//                     }
-//                 }
-//             }
-//             if (is_connected_to_strong)
-//             {
-//                 tts_val = 255.0f;
-//             }
-//             else
-//             {
-//                 tts_val = 0.0f;
-//             }
-//         }
-//         else
-//         {
-//            tts_val = 0.0f;
-//         }
-//         TTS_img[gLoc] = tts_val;
-// }
-//     }
-
 void printDebugArr(float *arr_d, int n, char *stringa)
 {
     float *arr_h = (float *)malloc(n * sizeof(float));
@@ -812,14 +837,15 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaDeviceSynchronize();
 }
 
-void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
+void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
     size_t img_size = width * height * sizeof(float);
-    float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug;
+    float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug_h;
     float *output_d;
-    img_debug = (float *)malloc(img_size);
+    unsigned char *img_data_d;
+    img_debug_h = (float *)malloc(img_size);
 
     // cudamallocs
     cudaMalloc(&img_sobel, img_size);
@@ -827,7 +853,9 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
     cudaMalloc(&lbcs_img, img_size);
     cudaMalloc(&tts_img, img_size);
     cudaMalloc(&output_d, img_size);
+    cudaMalloc(&img_data_d, width * height * 3 * sizeof(unsigned char));
 
+    // 1. Combining gradients to get magnitude and direction of each pixel
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
 
     cudaEvent_t start, stop;
@@ -836,38 +864,43 @@ void cannyMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int widt
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
+    // 2. Lower bound cutoff suppression to suppress non-maximum pixels with respect to the gradient direction
     lowerBoundCutoffSuppression_sh<<<grid, block>>>(img_sobel, sobel_directions, lbcs_img, width, height);
     cudaDeviceSynchronize();
     cudaEventRecord(stop);
-
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Elapsed time for LBCS: %f ms\n", milliseconds);
 
-    doubleThresholdSuppression<<<grid, block>>>(lbcs_img, output, width, height, low_th, high_th);
+    // 3. Double thresholding suppression to mark edge pixels as strong, weak or non-edge
+    doubleThresholdSuppression<<<grid, block>>>(lbcs_img, output_d, width, height, low_th, high_th);
 
-    // dim3 block2 = dim3(TILE_WIDTH, TILE_WIDTH);
-    // dim3 grid2((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-    // time the hysteresis kernel
     cudaEvent_t start2, stop2;
     float milliseconds2 = 0;
     cudaEventCreate(&start2);
     cudaEventCreate(&stop2);
 
+    // 4. Hysteresis to mark weak edge pixels as strong if they are connected to strong edge pixels
     cudaEventRecord(start2);
-    hysteresis<<<grid, block>>>(output, width, height);
+    hysteresis<<<grid, block>>>(output_d, width, height);
     cudaDeviceSynchronize();
     cudaEventRecord(stop2);
     cudaEventSynchronize(stop2);
     cudaEventElapsedTime(&milliseconds2, start2, stop2);
-    // printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
+    printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
+
+    // Copying img data from cv object to device, then overwriting it with the output of the kernel and copying it back to the host
+    cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    copy1ChannelTo3<<<grid, block>>>(output_d, img_data_d, width, height);
+    cudaMemcpy(img_data, img_data_d, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
 
     cudaFree(output_d);
     cudaFree(img_sobel);
     cudaFree(sobel_directions);
     cudaFree(lbcs_img);
     cudaFree(tts_img);
-    free(img_debug);
+    cudaFree(img_data_d);
+    free(img_debug_h);
 }
 void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {

@@ -83,7 +83,7 @@ void cannyEdgeDetector(cv::Mat *img, float *sobel_x, float *sobel_y, int width, 
     cudaMalloc(&sobel_directions, img_gray_size_h);
     cudaMalloc(&img_canny_d, img_gray_size_h);
 
-    cannyMainKernelWrap(sobel_x, sobel_y, img_canny_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+    // cannyMainKernelWrap(sobel_x, sobel_y, img_canny_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 
     // // copy the sobel image to the host
     cudaMemcpy(img_debug_h, img_canny_d, img_gray_size_h, cudaMemcpyDeviceToHost);
