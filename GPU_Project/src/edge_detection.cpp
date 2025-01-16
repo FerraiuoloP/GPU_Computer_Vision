@@ -19,7 +19,7 @@ void harrisCornerDetector(cv::Mat *img, float *sobel_x, float *sobel_y, int widt
     img_harris_h = (float *)malloc(img_gray_size_h);
     cudaMalloc(&img_harris_d, img_gray_size_h);
 
-    harrisMainKernelWrap(sobel_x, sobel_y, img_harris_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+    harrisMainKernelWrap(sobel_x, sobel_y, img_harris_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, shi_tomasi);
 
     // harris to host
     cudaMemcpy(img_harris_h, img_harris_d, img_gray_size_h, cudaMemcpyDeviceToHost);
