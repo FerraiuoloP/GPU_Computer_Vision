@@ -210,6 +210,42 @@ __global__ void find_max_reduction(float *img, float *max_value, int width, int 
 }
 
 /**
+ * @brief Max reduction using shared memory
+ *
+ * @param img
+ * @param max_value
+ * @param width
+ * @param height
+ * @return __global__
+ */
+__global__ void find_max_reduction_sh(float *img, float *max_value, int width, int height)
+{
+    extern __shared__ float shared_max[];
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    int globalIdx = y * width + x;
+
+    shared_max[tid] = img[globalIdx];
+    __syncthreads();
+    for (int s = blockDim.x * blockDim.y / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            shared_max[tid] = fmaxf(shared_max[tid], shared_max[tid + s]);
+        }
+        __syncthreads();
+    }
+
+    // Max value found by using custom atomic max operation
+    if (tid == 0)
+    {
+        atomicMax(max_value, shared_max[0]);
+        // max_value[0] = atomicMax(max_value, block_max);
+    }
+}
+
+/**
  * @brief Non maximum suppression kernel. It compares the current pixel with its neighbours in a window of size window_size x window_size.
  * If the current pixel is not the maximum, it is set to 0.
  *
@@ -942,7 +978,7 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for convolution: %f ms\n", milliseconds);
+    // printf("Elapsed time for convolution: %f ms\n", milliseconds);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
@@ -1124,7 +1160,15 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Max value: %f ms\n", milliseconds);
+    printf("Elapsed time for Max value SHFL: %f ms\n", milliseconds);
+
+    cudaEventRecord(start);
+
+    find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("Elapsed time for Max value SH: %f ms\n", milliseconds);
 
     // debug only
     cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
