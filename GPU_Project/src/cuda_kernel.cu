@@ -71,6 +71,36 @@ __global__ void copy1ChannelTo3(float *src_img_d, unsigned char *dst_img_d, int 
     }
 }
 
+__global__ void cornerColoring(float *harris_map, unsigned char *dst_img_d, int width, int height, float threshold)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < width && j < height)
+    {
+        int idx = i * height + j;
+        int idx2 = 3 * idx;
+        if (harris_map[idx] > threshold && i > 2 && j > 2 && i < width - 2 && j < height - 2)
+        {
+            // Coloring a single corner pixel in red
+            // dst_img_d[idx2] = 255;
+            // dst_img_d[idx2 + 1] = 0;
+            // dst_img_d[idx2 + 2] = 0;
+
+            // Coloring in a 3x3 window around the corner
+            for (int k = -1; k <= 1; k++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    int idx3 = idx2 + (k * width + z) * 3;
+                    dst_img_d[idx3] = 255;
+                    dst_img_d[idx3 + 1] = 0;
+                    dst_img_d[idx3 + 2] = 0;
+                }
+            }
+        }
+    }
+}
+
 __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int N, int M, int window_size)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -945,6 +975,8 @@ void rgbToGrayKernelWrap(unsigned char *img_d, float *gray_d, int N, int M)
     {
         fprintf(stderr, "Error in kernel RGB: %s\n", cudaGetErrorString(err));
     }
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 }
 
 void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
@@ -985,6 +1017,8 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
         fprintf(stderr, "Error in kernel CONVGPU: %s\n", cudaGetErrorString(err));
     }
     cudaDeviceSynchronize();
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 }
 
 void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
@@ -1052,28 +1086,26 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     cudaFree(img_data_d);
     free(img_debug_h);
 }
-void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
+// TODO: Remove parameter float* output
+void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
+    float milliseconds = 0;
+    float max_value_f = -FLT_MAX;
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
     float *output_d;
     float *max_value_d;
-    float max_value_f = -FLT_MAX;
+    unsigned char *img_data_d;
     cudaStream_t streams[3];
     cudaEvent_t start, stop;
-    float milliseconds = 0;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     const dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                         (height + blockSize.y - 1) / blockSize.y,
                         1);
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
 
-    for (int i = 0; i < 3; i++)
-    {
-        checkCuda(cudaStreamCreate(&streams[i]));
-    }
+#pragma region Memory Allocation
     // cuda malloc
     cudaMalloc(&Ix2_d, n * sizeof(float));
     cudaMalloc(&Iy2_d, n * sizeof(float));
@@ -1083,6 +1115,7 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaMalloc(&traceM_d, n * sizeof(float));
     cudaMalloc(&output_d, n * sizeof(float));
     cudaMalloc(&max_value_d, sizeof(float));
+    cudaMalloc(&img_data_d, n * 3 * sizeof(unsigned char));
 
     cudaMemcpy(max_value_d, &max_value_f, sizeof(float), cudaMemcpyHostToDevice);
 
@@ -1090,7 +1123,9 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaStreamCreate(&streams[0]);
     cudaStreamCreate(&streams[1]);
     cudaStreamCreate(&streams[2]);
+#pragma endregion
 
+#pragma region 1-2. Preparing Gradients
     // 1. Compute Ix^2, Iy^2, and Ix*Iy in parallel using streams
     vecMul<<<gridSize, blockSize, 0, streams[0]>>>(sobel_x, sobel_x, Ix2_d, width, height);  // Ix^2
     vecMul<<<gridSize, blockSize, 0, streams[1]>>>(sobel_y, sobel_y, Iy2_d, width, height);  // Iy^2
@@ -1122,7 +1157,9 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
 
     // Synchronize streams
     cudaDeviceSynchronize();
+#pragma endregion
 
+#pragma region 3-5. Computing Harris/ShiTomasi Response
     if (!shi_tomasi)
     {
 
@@ -1142,25 +1179,31 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
         // 5b. Compute the Shi-Tomasi response. R =  min(trace / 2 + sqrtf(trace * trace / 4 - determinant), trace / 2 . sqrtf(trace * trace / 4 - determinant))
         computeShiTommasiResponse<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, IxIy_d, output_d, width, height);
     }
+    cudaDeviceSynchronize();
+#pragma endregion
 
-    // 6. Non-maximum suppression on the Harris response
+#pragma region 6. Non-maximum suppression on the Harris response
     cudaEventRecord(start);
     nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
     printf("Elapsed time for NMS: %f ms\n", milliseconds);
+#pragma endregion
 
+#pragma region 7. Finding Max value in Harris response
     size_t sh_mem_size = blockSize.x * blockSize.y * sizeof(float);
-
-    // 7. Finding Max value in Harris response
     cudaEventRecord(start);
 
     find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Max value SHFL: %f ms\n", milliseconds);
+    printf("Elapsed time for Max value Shfl: %f ms\n", milliseconds);
+
+    // debug only
+    cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
+    printf("Max value in Harris response Shfl: %f\n", max_value_f);
 
     cudaEventRecord(start);
 
@@ -1168,19 +1211,22 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Max value SH: %f ms\n", milliseconds);
+    printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
 
     // debug only
     cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
-    printf("Max value in Harris response: %f\n", max_value_f);
+    printf("Max value in Harris response Shrd: %f\n", max_value_f);
+#pragma endregion
 
-    // 8. Corner thresholding
-    // TODO
-
+#pragma region 8. Corner thresholding
+    cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    cornerColoring<<<gridSize, blockSize>>>(output_d, img_data_d, width, height, max_value_f * alpha);
+    cudaMemcpy(img_data, img_data_d, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+#pragma endregion
     // TODO: Remove when harrisCornerDetector in edge_detection.cpp has been removed
-    cudaMemcpy(output, output_d, n * sizeof(float), cudaMemcpyDeviceToDevice);
+    // cudaMemcpy(output, output_d, n * sizeof(float), cudaMemcpyDeviceToDevice);
 
-    // Cleanup
+#pragma region Cleanup
     cudaFree(Ix2_d);
     cudaFree(Iy2_d);
     cudaFree(IxIy_d);
@@ -1188,8 +1234,14 @@ void harrisMainKernelWrap(float *sobel_x, float *sobel_y, float *output, int wid
     cudaFree(detM_d);
     cudaFree(traceM_d);
     cudaFree(output_d);
+    cudaFree(max_value_d);
+    cudaFree(img_data_d);
 
     cudaStreamDestroy(streams[0]);
     cudaStreamDestroy(streams[1]);
     cudaStreamDestroy(streams[2]);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+#pragma endregion
 }

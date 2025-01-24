@@ -135,10 +135,12 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	switch (mode)
 	{
 	case HARRIS:
-		harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
+		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
+		harrisMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
 		break;
 	case SHI_TOMASI:
-		harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+		harrisMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
 		break;
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
@@ -172,6 +174,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		break;
 	}
 
+	// Showing the result
 	if (mode != CANNY_GUI)
 	{
 
@@ -279,7 +282,7 @@ int main(const int argc, const char **argv)
 {
 	enum Mode mode;
 	bool is_video = false;
-	// Arguments parsing
+#pragma region Arguments Parsing
 	if (argc < 3)
 	{
 		fprintf(stderr, "Not enough arguments, at least 3 are required. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
@@ -419,6 +422,8 @@ int main(const int argc, const char **argv)
 			fprintf(stderr, "Too many arguments for the specified mode. Ignoring extra arguments.\n");
 		}
 	}
+#pragma endregion
+#pragma region Driver Code
 	if (mode == ALL)
 	{
 		if (is_video)
@@ -442,6 +447,7 @@ int main(const int argc, const char **argv)
 			handle_image(mode, filename, low_threshold, high_threshold);
 		}
 	}
+#pragma endregion
 	return 0;
 }
 // g++ -std=c++11 -IC:C:\opencv\opencv\build\include  -LC:C:\opencv\opencv\build\x64\vc15\lib -lopencv_core470 -lopencv_highgui470 -lopencv_imgcodecs470 -lopencv_imgproc470 -o my_program.exe main.cpp
