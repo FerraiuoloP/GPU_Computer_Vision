@@ -23,28 +23,98 @@ inline cudaError_t checkCuda(cudaError_t result)
     return result;
 }
 
-/**
- * @brief Kernel that convers a RGB image to a Grayscale image
+/*************************
  *
- * @param img_d Source RGB image
- * @param gray_d  Destination Grayscale image
- * @param N
- * @param M
+ * GENERIC KERNELS
+ *
+ *************************/
+
+/**
+ * @brief Vector addition kernel. It computes the element-wise addition of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
  * @return __global__
  */
-__global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int width, int height)
+__global__ void vecAdd(float *A, float *B, float *C, int M, int N)
 {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x < width && y < height)
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
     {
-        int idx = x * height + y;
-        int idx2 = 3 * idx;
-        float r = (float)(img_d[idx2]) * 0.299;
-        float g = (float)(img_d[idx2 + 1]) * 0.587;
-        float b = (float)(img_d[idx2 + 2]) * 0.114;
+        int idx = j * M + i;
+        C[idx] = A[idx] + B[idx];
+    }
+}
 
-        gray_d[idx] = (r + g + b);
+/**
+ * @brief Vector multiplication kernel. It computes the element-wise multiplication of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
+__global__ void vecMul(float *A, float *B, float *C, int M, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
+    {
+        int idx = j * M + i;
+        C[idx] = A[idx] * B[idx];
+    }
+}
+/**
+ * @brief Vector subtraction kernel. It computes the element-wise subtraction of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
+__global__ void vecSub(float *A, float *B, float *C, int M, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
+    {
+        int idx = j * M + i;
+        C[idx] = A[idx] - B[idx];
+    }
+}
+/**
+ * @brief Vector division kernel. It computes the element-wise division of two vectors.
+ *
+ * @param A Input vector A
+ * @param B Input vector B
+ * @param C Output vector C
+ * @param M Number of rows
+ * @param N Number of columns
+ * @return __global__
+ */
+__global__ void vecDiv(float *A, float *B, float *C, int M, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
+    {
+        int idx = j * M + i;
+        if (B[idx] != 0)
+        {
+            C[idx] = A[idx] / B[idx];
+        }
+        else
+        {
+            C[idx] = 0; // division by zero error handling
+        }
     }
 }
 
@@ -98,6 +168,37 @@ __global__ void cornerColoring(float *harris_map, unsigned char *dst_img_d, int 
                 }
             }
         }
+    }
+}
+
+/**************
+ *
+ * Main kernels
+ *
+ **************/
+
+/**
+ * @brief Kernel that convers a RGB image to a Grayscale image
+ *
+ * @param img_d Source RGB image
+ * @param gray_d  Destination Grayscale image
+ * @param N
+ * @param M
+ * @return __global__
+ */
+__global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int width, int height)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x < width && y < height)
+    {
+        int idx = x * height + y;
+        int idx2 = 3 * idx;
+        float r = (float)(img_d[idx2]) * 0.299;
+        float g = (float)(img_d[idx2 + 1]) * 0.587;
+        float b = (float)(img_d[idx2 + 2]) * 0.114;
+
+        gray_d[idx] = (r + g + b);
     }
 }
 
@@ -403,94 +504,6 @@ __global__ void convolutionGPU(
             }
         }
         result_d[gLoc] = sum;
-    }
-}
-/**
- * @brief Vector addition kernel. It computes the element-wise addition of two vectors.
- *
- * @param A Input vector A
- * @param B Input vector B
- * @param C Output vector C
- * @param M Number of rows
- * @param N Number of columns
- * @return __global__
- */
-__global__ void vecAdd(float *A, float *B, float *C, int M, int N)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = j * M + i;
-        C[idx] = A[idx] + B[idx];
-    }
-}
-
-/**
- * @brief Vector multiplication kernel. It computes the element-wise multiplication of two vectors.
- *
- * @param A Input vector A
- * @param B Input vector B
- * @param C Output vector C
- * @param M Number of rows
- * @param N Number of columns
- * @return __global__
- */
-__global__ void vecMul(float *A, float *B, float *C, int M, int N)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = j * M + i;
-        C[idx] = A[idx] * B[idx];
-    }
-}
-/**
- * @brief Vector subtraction kernel. It computes the element-wise subtraction of two vectors.
- *
- * @param A Input vector A
- * @param B Input vector B
- * @param C Output vector C
- * @param M Number of rows
- * @param N Number of columns
- * @return __global__
- */
-__global__ void vecSub(float *A, float *B, float *C, int M, int N)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = j * M + i;
-        C[idx] = A[idx] - B[idx];
-    }
-}
-/**
- * @brief Vector division kernel. It computes the element-wise division of two vectors.
- *
- * @param A Input vector A
- * @param B Input vector B
- * @param C Output vector C
- * @param M Number of rows
- * @param N Number of columns
- * @return __global__
- */
-__global__ void vecDiv(float *A, float *B, float *C, int M, int N)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = j * M + i;
-        if (B[idx] != 0)
-        {
-            C[idx] = A[idx] / B[idx];
-        }
-        else
-        {
-            C[idx] = 0; // division by zero error handling
-        }
     }
 }
 
