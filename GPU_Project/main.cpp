@@ -121,14 +121,9 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	cudaMemcpy(sobel_y_kernel_d, sobel_y_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
 
 	// Commong operations for all modes(except for OTSU_BIN)
-	// RGB to Gray
-	// measure time of rgb to gray
-	int64 start_time = cv::getTickCount();
-	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
 
-	int64 end_time = cv::getTickCount();
-	double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
-	cout << "Elapsed time for Whole RGB to Gray: " << elapsed_time_ms << " ms" << endl;
+	// RGB to Gray
+	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
 
 	// Apply Gaussian Blur to grayscale image
 	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d);

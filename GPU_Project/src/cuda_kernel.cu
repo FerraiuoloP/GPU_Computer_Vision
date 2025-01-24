@@ -170,6 +170,154 @@ __global__ void cornerColoring(float *harris_map, unsigned char *dst_img_d, int 
         }
     }
 }
+/***********************
+ *
+ * Convolution Kernels
+ *
+ **********************/
+/**
+ * @brief Fast Convolution kernel with shared memory. It computes the convolution of an image with a given kernel
+ *
+ * @param result_d Output image
+ * @param data_d Input image
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param kernel_d Convolution kernel
+ * @return __global__
+ */
+__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, float *kernel_d)
+{
+    // Shared memory for the tile and its border
+    __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
+
+    // Calculate global memory location of this thread
+    const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
+    const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
+    const int gLoc = x0 + y0 * width;
+
+    // Load corners into shared memory
+    if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
+    {
+        // Top-left corner
+        int x = x0 - 1;
+        int y = y0 - 1;
+        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
+
+        // Top-right corner
+        x = x0 + 1;
+        y = y0 - 1;
+        data[threadIdx.y][threadIdx.x + 2] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
+
+        // Bottom-left corner
+        x = x0 - 1;
+        y = y0 + 1;
+        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
+
+        // Bottom-right corner
+        x = x0 + 1;
+        y = y0 + 1;
+        data[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
+    }
+
+    __syncthreads();
+
+    // Perform convolution
+    if (x0 < width && y0 < height)
+    {
+        float sum = 0.0f;
+        for (int i = -FILTER_RADIUS; i <= FILTER_RADIUS; ++i)
+        {
+            for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; ++j)
+            {
+                sum += data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] *
+                       kernel_d[(i + 1) * 3 + (j + 1)];
+            }
+        }
+        result_d[gLoc] = sum;
+    }
+}
+
+// How many results a thread computes per convolution
+#define ROW_THREAD_STEPS 8
+// Border around the shared memory
+#define ROW_HALO_STEPS 1
+
+__global__ void rowConvolution(float *result_d, float *data_d, int width, int height, float *kernel_d)
+{
+    __shared__ float data[TILE_WIDTH][(ROW_THREAD_STEPS + 2 * ROW_HALO_STEPS) * TILE_WIDTH];
+
+    // X position, shifted by the border(HALO STEPS), multiplied by ROW_THREAD_STEPS(how many convolution results the thread computes)
+    const int x0 = (blockIdx.x * ROW_THREAD_STEPS - ROW_HALO_STEPS) * TILE_WIDTH + threadIdx.x;
+    const int y0 = blockIdx.y * blockDim.y + threadIdx.y;
+
+// Loading main data
+#pragma unroll
+    for (int i = ROW_HALO_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS; i++)
+    {
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = data_d[i * TILE_WIDTH];
+    }
+
+// Loading left halo
+#pragma unroll
+    for (int i = 0; i < ROW_HALO_STEPS; i++)
+    {
+        // if at the image (left)border, load 0
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = (x0 >= 0) ? data_d[i * TILE_WIDTH] : 0.0f;
+    }
+
+// Loading right halo
+#pragma unroll
+    for (int i = ROW_HALO_STEPS + ROW_THREAD_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS + ROW_HALO_STEPS; i++)
+    {
+        // if x0 + row kernel size is greater than width, load 0(we are at the right border)
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = (width - x0 > i * TILE_WIDTH) ? data_d[i * TILE_WIDTH] : 0.0f;
+    }
+
+    // Syncrhonizing so that all data is loaded
+    __syncthreads();
+
+// Actually computing the convolution
+#pragma unroll
+    for (int i = ROW_HALO_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS; i++)
+    {
+        float sum = 0.0f;
+#pragma unroll
+        for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; j++)
+        {
+            sum += data[threadIdx.y][threadIdx.x + i * TILE_WIDTH + j] * kernel_d[j + 1];
+        }
+        result_d[i * TILE_WIDTH] = sum;
+    }
+}
+
+__global__ void columnConvolution(float *result_d, float *data_d, int width, int height, float *kernel_d)
+{
+}
+// Simple not-optimized convolution kernel
+__global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
+    {
+        int idx = i * N + j;
+        int k = kernel_size / 2;
+        float sum = 0.0f;
+        for (int u = -k; u <= k; u++)
+        {
+            for (int v = -k; v <= k; v++)
+            {
+                int x = i + u;
+                int y = j + v;
+                if (x >= 0 && x < M && y >= 0 && y < N)
+                {
+                    sum += img_d[x * N + y] * kernel[(u + k) * kernel_size + (v + k)];
+                }
+            }
+        }
+        img_out_d[idx] = sum;
+    }
+}
 
 /**************
  *
@@ -199,31 +347,6 @@ __global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int width, 
         float b = (float)(img_d[idx2 + 2]) * 0.114;
 
         gray_d[idx] = (r + g + b);
-    }
-}
-
-__global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int N, int M, int window_size)
-{
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = i * N + j;
-        int k = window_size / 2;
-        float max_val = 0.0f;
-        for (int u = -k; u <= k; u++)
-        {
-            for (int v = -k; v <= k; v++)
-            {
-                int x = i + u;
-                int y = j + v;
-                if (x >= 0 && x < M && y >= 0 && y < N)
-                {
-                    max_val = fmaxf(max_val, harris_map[x * N + y]);
-                }
-            }
-        }
-        corners_output[idx] = (harris_map[idx] == max_val) ? harris_map[idx] : 0.0f;
     }
 }
 
@@ -440,70 +563,28 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
     }
 }
 
-/**
- * @brief Fast Convolution kernel with shared memory. It computes the convolution of an image with a given kernel
- *
- * @param result_d Output image
- * @param data_d Input image
- * @param width Width of the image
- * @param height Height of the image
- * @param kernel_d Convolution kernel
- * @return __global__
- */
-__global__ void convolutionGPU(
-    float *result_d,
-    float *data_d,
-    int width,
-    int height,
-    float *kernel_d)
+__global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int N, int M, int window_size)
 {
-    // Shared memory for the tile and its border
-    __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
-
-    // Calculate global memory location of this thread
-    const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
-    const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
-    const int gLoc = x0 + y0 * width;
-
-    // Load corners into shared memory
-    if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < M && j < N)
     {
-        // Top-left corner
-        int x = x0 - 1;
-        int y = y0 - 1;
-        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
-
-        // Top-right corner
-        x = x0 + 1;
-        y = y0 - 1;
-        data[threadIdx.y][threadIdx.x + 2] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
-
-        // Bottom-left corner
-        x = x0 - 1;
-        y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
-
-        // Bottom-right corner
-        x = x0 + 1;
-        y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
-    }
-
-    __syncthreads();
-
-    // Perform convolution
-    if (x0 < width && y0 < height)
-    {
-        float sum = 0.0f;
-        for (int i = -1; i <= 1; ++i)
+        int idx = i * N + j;
+        int k = window_size / 2;
+        float max_val = 0.0f;
+        for (int u = -k; u <= k; u++)
         {
-            for (int j = -1; j <= 1; ++j)
+            for (int v = -k; v <= k; v++)
             {
-                sum += data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] *
-                       kernel_d[(i + 1) * 3 + (j + 1)];
+                int x = i + u;
+                int y = j + v;
+                if (x >= 0 && x < M && y >= 0 && y < N)
+                {
+                    max_val = fmaxf(max_val, harris_map[x * N + y]);
+                }
             }
         }
-        result_d[gLoc] = sum;
+        corners_output[idx] = (harris_map[idx] == max_val) ? harris_map[idx] : 0.0f;
     }
 }
 
@@ -518,7 +599,8 @@ __global__ void convolutionGPU(
  * @param height Height of the image
  * @return __global__
  */
-__global__ void computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
+__global__ void
+computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -559,30 +641,6 @@ __global__ void applyThreshold(const float *harris_map, float *corners_output, i
         int idx = j * M + i;
         int val = harris_map[idx];
         corners_output[idx] = (val > threshold) ? val : 0.0f;
-    }
-}
-__global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
-{
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = i * N + j;
-        int k = kernel_size / 2;
-        float sum = 0.0f;
-        for (int u = -k; u <= k; u++)
-        {
-            for (int v = -k; v <= k; v++)
-            {
-                int x = i + u;
-                int y = j + v;
-                if (x >= 0 && x < M && y >= 0 && y < N)
-                {
-                    sum += img_d[x * N + y] * kernel[(u + k) * kernel_size + (v + k)];
-                }
-            }
-        }
-        img_out_d[idx] = sum;
     }
 }
 

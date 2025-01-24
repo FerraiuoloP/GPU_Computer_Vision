@@ -1,4 +1,5 @@
 const int FILTER_WIDTH = 3;
+const int FILTER_RADIUS = FILTER_WIDTH / 2;
 const float FILTER_SIGMA = 1.75f;
 // const float FILTER_SIGMA = 3;
 const float ALPHA = 0.05;
