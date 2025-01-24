@@ -442,7 +442,6 @@ int main(const int argc, const char **argv)
 			handle_image(mode, filename, low_threshold, high_threshold);
 		}
 	}
-	// Actual driver code
 	return 0;
 }
 // g++ -std=c++11 -IC:C:\opencv\opencv\build\include  -LC:C:\opencv\opencv\build\x64\vc15\lib -lopencv_core470 -lopencv_highgui470 -lopencv_imgcodecs470 -lopencv_imgproc470 -o my_program.exe main.cpp
