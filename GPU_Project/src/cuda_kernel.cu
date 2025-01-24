@@ -1023,13 +1023,20 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
 
 void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
+    size_t img_size = width * height * sizeof(float);
+    float milliseconds = 0;
+    float milliseconds2 = 0;
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-    size_t img_size = width * height * sizeof(float);
     float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug_h;
     float *output_d;
     unsigned char *img_data_d;
+    cudaEvent_t start, stop;
+    cudaEvent_t start2, stop2;
     img_debug_h = (float *)malloc(img_size);
+
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
 
     // cudamallocs
     cudaMalloc(&img_sobel, img_size);
@@ -1042,13 +1049,8 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     // 1. Combining gradients to get magnitude and direction of each pixel
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
 
-    cudaEvent_t start, stop;
-    float milliseconds = 0;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
-    cudaEventRecord(start);
     // 2. Lower bound cutoff suppression to suppress non-maximum pixels with respect to the gradient direction
+    cudaEventRecord(start);
     lowerBoundCutoffSuppression_sh<<<grid, block>>>(img_sobel, sobel_directions, lbcs_img, width, height);
     cudaDeviceSynchronize();
     cudaEventRecord(stop);
@@ -1059,8 +1061,6 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     // 3. Double thresholding suppression to mark edge pixels as strong, weak or non-edge
     doubleThresholdSuppression<<<grid, block>>>(lbcs_img, output_d, width, height, low_th, high_th);
 
-    cudaEvent_t start2, stop2;
-    float milliseconds2 = 0;
     cudaEventCreate(&start2);
     cudaEventCreate(&stop2);
 
@@ -1086,7 +1086,7 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     cudaFree(img_data_d);
     free(img_debug_h);
 }
-// TODO: Remove parameter float* output
+
 void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
@@ -1102,6 +1102,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     const dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                         (height + blockSize.y - 1) / blockSize.y,
                         1);
+    size_t sh_mem_size = blockSize.x * blockSize.y * sizeof(float);
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
@@ -1192,7 +1193,6 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
 #pragma endregion
 
 #pragma region 7. Finding Max value in Harris response
-    size_t sh_mem_size = blockSize.x * blockSize.y * sizeof(float);
     cudaEventRecord(start);
 
     find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
@@ -1223,8 +1223,6 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cornerColoring<<<gridSize, blockSize>>>(output_d, img_data_d, width, height, max_value_f * alpha);
     cudaMemcpy(img_data, img_data_d, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
 #pragma endregion
-    // TODO: Remove when harrisCornerDetector in edge_detection.cpp has been removed
-    // cudaMemcpy(output, output_d, n * sizeof(float), cudaMemcpyDeviceToDevice);
 
 #pragma region Cleanup
     cudaFree(Ix2_d);
