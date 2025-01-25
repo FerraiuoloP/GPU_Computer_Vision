@@ -12,6 +12,7 @@ void mapKernelToRGBWrap(float *img_harris, unsigned char *img_harris_rgb, int wi
 void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi);
 void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float low_threshold, float high_threshold, float *gaussian_kernel, int g_kernel_size);
 void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel);
+void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, int height, float *kernel_x, float *kernel_y, int kernel_size);
 int otsu_threshold(float *image, int width, int height);
 void binarize_img(float *img_d, float *img_h, int width, int height);
 void binarize_img_wrapper(unsigned char *img_h, float *img_d, int width, int height, int threshold);

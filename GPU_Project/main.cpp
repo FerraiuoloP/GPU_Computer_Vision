@@ -14,7 +14,10 @@ using namespace cv;
 using namespace std;
 
 const float sobel_x_kernel[9] = {1, 0, -1, 2, 0, -2, 1, 0, -1};
+const float sobel_x_separable[3] = {1, 2, 1};
+
 const float sobel_y_kernel[9] = {1, 2, 1, 0, 0, 0, -1, -2, -1};
+const float sobel_y_separable[3] = {-1, 0, 1};
 enum Mode
 {
 	// -H. Normal Harris Corner Detection
@@ -93,7 +96,9 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// kernel devices
 	float *sobel_x_kernel_d;
+	float *sobel_x_separable_d;
 	float *sobel_y_kernel_d;
+	float *sobel_y_separable_d;
 
 	float *gaussian_kernel = computeGaussianKernel(FILTER_WIDTH, FILTER_SIGMA);
 	float *gaussian_kernel_d;
@@ -107,7 +112,9 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	cudaMalloc(&img_blurred_d, img_gray_size_h);
 	cudaMalloc(&gaussian_kernel_d, FILTER_WIDTH * FILTER_WIDTH * sizeof(float));
 	cudaMalloc(&sobel_x_kernel_d, 3 * 3 * sizeof(float));
+	cudaMalloc(&sobel_x_separable_d, 3 * sizeof(float));
 	cudaMalloc(&sobel_y_kernel_d, 3 * 3 * sizeof(float));
+	cudaMalloc(&sobel_y_separable_d, 3 * sizeof(float));
 	cudaMalloc(&img_sobel_x_d, img_gray_size_h);
 	cudaMalloc(&img_sobel_y_d, img_gray_size_h);
 	cudaMalloc(&img_harris_d, img_gray_size_h);
@@ -130,7 +137,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// Sobel X
 	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d);
-
+	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_x_d, width, height, sobel_x_separable_d, sobel_x_separable_d, 3);
 	// Sobel Y
 	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d);
 

@@ -10,7 +10,7 @@
 #include "../include/cuda_kernel.cuh"
 using namespace std;
 #define TILE_WIDTH 16 // 16 X 16 TILE
-#define KERNEL_RADIUS 1
+
 inline cudaError_t checkCuda(cudaError_t result)
 {
 #if defined(DEBUG) || defined(_DEBUG)
@@ -250,6 +250,10 @@ __global__ void rowConvolution(float *result_d, float *data_d, int width, int he
     const int x0 = (blockIdx.x * ROW_THREAD_STEPS - ROW_HALO_STEPS) * TILE_WIDTH + threadIdx.x;
     const int y0 = blockIdx.y * blockDim.y + threadIdx.y;
 
+    // Adjusting the pointers to the correct position by adding the y0 and x0 offsets
+    result_d += y0 * width + x0;
+    data_d += y0 * width + x0;
+
 // Loading main data
 #pragma unroll
     for (int i = ROW_HALO_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS; i++)
@@ -284,14 +288,61 @@ __global__ void rowConvolution(float *result_d, float *data_d, int width, int he
 #pragma unroll
         for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; j++)
         {
-            sum += data[threadIdx.y][threadIdx.x + i * TILE_WIDTH + j] * kernel_d[j + 1];
+            sum += data[threadIdx.y][threadIdx.x + i * TILE_WIDTH + j] * kernel_d[FILTER_RADIUS + j];
         }
         result_d[i * TILE_WIDTH] = sum;
     }
 }
 
+// How many results a thread computes per convolution
+#define COL_THREAD_STEPS 8
+// Border around the shared memory
+#define COL_HALO_STEPS 1
 __global__ void columnConvolution(float *result_d, float *data_d, int width, int height, float *kernel_d)
 {
+    __shared__ float data[TILE_WIDTH][(COL_THREAD_STEPS + 2 * COL_HALO_STEPS) * TILE_WIDTH + 1];
+
+    const int x0 = blockIdx.x * TILE_WIDTH + threadIdx.x;
+    const int y0 = (blockIdx.y * COL_THREAD_STEPS - COL_HALO_STEPS) * TILE_WIDTH + threadIdx.y;
+
+    result_d += y0 * width + x0;
+    data_d += y0 * width + x0;
+
+    // Loading main data
+#pragma unroll
+    for (int i = COL_HALO_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS; i++)
+    {
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = data_d[i * TILE_WIDTH * width];
+    }
+
+    // Loading top halo
+#pragma unroll
+    for (int i = 0; i < COL_HALO_STEPS; i++)
+    {
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = (y0 >= 0) ? data_d[i * TILE_WIDTH * width] : 0.0f;
+    }
+
+    // Loading bottom halo
+#pragma unroll
+    for (int i = COL_HALO_STEPS + COL_THREAD_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS + COL_HALO_STEPS; i++)
+    {
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = (height - y0 > i * TILE_WIDTH) ? data_d[i * TILE_WIDTH * width] : 0.0f;
+    }
+
+    __syncthreads();
+
+    // Actually computing the convolution
+#pragma unroll
+    for (int i = COL_HALO_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS; i++)
+    {
+        float sum = 0.0f;
+#pragma unroll
+        for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; j++)
+        {
+            sum += data[threadIdx.x][threadIdx.y + i * TILE_WIDTH + j] * kernel_d[FILTER_RADIUS + j];
+        }
+        result_d[i * TILE_WIDTH * width] = sum;
+    }
 }
 // Simple not-optimized convolution kernel
 __global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
@@ -1020,6 +1071,17 @@ void printDebugArr(float *arr_d, int n, char *stringa)
         printf("%s[%d] = %f\n", stringa, i, arr_h[i]);
     }
     free(arr_h);
+}
+
+void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, int height, float *kernel_x, float *kernel_y, int kernel_size)
+{
+    const dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
+    const dim3 gridSize(width / TILE_WIDTH + 1, height / TILE_WIDTH + 1);
+    rowConvolution<<<gridSize, blockSize>>>(img_d, img_out_d, width, height, kernel_x);
+    cudaDeviceSynchronize();
+
+    columnConvolution<<<gridSize, blockSize>>>(img_out_d, img_d, width, height, kernel_y);
+    cudaDeviceSynchronize();
 }
 
 void rgbToGrayKernelWrap(unsigned char *img_d, float *gray_d, int N, int M)
