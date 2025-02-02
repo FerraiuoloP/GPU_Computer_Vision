@@ -220,7 +220,7 @@ __global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int w
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x < width && y < height)
     {
-        int idx = x * height + y;
+        int idx = y * width + x;
         output_d[idx] = (unsigned char)(img_d[idx] > threshold ? 255 : 0);
     }
 }

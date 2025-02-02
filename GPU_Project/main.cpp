@@ -58,6 +58,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	if (!from_video)
 	{
 		img = cv::imread(filename, cv::IMREAD_COLOR);
+	
 		if (img.empty())
 		{
 			std::cerr << "Error: Unable to load image." << std::endl;
@@ -68,20 +69,20 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	{
 		img = img_v;
 	}
-	cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+	cv::cvtColor(img, img, cv::COLOR_BGR2RGBA);
 
 	// variable declarations
 	int width = img.cols;
 	int height = img.rows;
 	int channels = img.channels();
-
+	printf("Channels: %d\n", channels);
 	size_t img_size_h = width * height * channels * sizeof(unsigned char);
 	size_t img_gray_size_h = width * height * sizeof(float);
 
 	printf("Image size: %d x %d \n", width, height);
 
 	// device variable declarations
-	unsigned char *img_d;
+	uchar4* img_d;
 	float *img_gray_d;
 	float *img_blurred_d;
 	float *img_harris_d;
@@ -107,6 +108,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// memcpy(img_h, img.data, img_size_h);
 
 	// cuda memory allocations
+	
 	cudaMalloc(&img_d, img_size_h);
 	cudaMalloc(&img_gray_d, img_gray_size_h);
 	cudaMalloc(&img_blurred_d, img_gray_size_h);
@@ -121,7 +123,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// cudamemcpys
 	// cudaMemcpy(img_d, img_h, img_size_h, cudaMemcpyHostToDevice);
-	cudaHostRegister(img.data, img_size_h, cudaHostRegisterPortable);
+	// cudaHostRegister(img.data, img_size_h, cudaHostRegisterPortable);
 	cudaMemcpy(img_d, img.data, img_size_h, cudaMemcpyHostToDevice);
 	cudaMemcpy(gaussian_kernel_d, gaussian_kernel, FILTER_WIDTH * FILTER_WIDTH * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(sobel_x_kernel_d, sobel_x_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
@@ -131,6 +133,10 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// RGB to Gray
 	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
+
+	// //convert to host
+	// cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// showImage(height,width,img_gray_h, "Gray Image");
 
 	// Apply Gaussian Blur to grayscale image
 	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d);
@@ -145,20 +151,21 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	switch (mode)
 	{
 	case HARRIS:
+	
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
-		harrisMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
+		harrisMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
 		break;
 	case SHI_TOMASI:
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
-		harrisMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+		harrisMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
 		break;
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_MANUAL:
-		cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_GUI:
 	{
@@ -169,7 +176,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		cv::createTrackbar("Threshold Low", "Output Image", &thresh_l, 255);
 		while (true)
 		{
-			cannyMainKernelWrap(img.data, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
+			cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
 			cv::imshow("Output Image", img);
 			if (cv::waitKey(1) == 27) // wait to press 'esc' key
 			{
@@ -196,16 +203,15 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		}
 		else
 		{
-			img_out = cv::Mat(height, width, CV_8UC3, img.data);
+			img_out = cv::Mat(height, width, CV_8UC4, img.data);
 		}
 		string window_name = "Output Image " + to_string(mode);
-		cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
+		cv::cvtColor(img_out, img_out, cv::COLOR_RGBA2BGR);
 		cv::imshow(window_name, img_out);
 
 		// If not from video, wait for key press
 		if (!from_video)
 		{
-
 			cv::waitKey(0);
 		}
 		img.release();
@@ -213,6 +219,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// (cuda)memory deallocations
 	cudaFree(img_d);
+   
 	cudaFree(img_gray_d);
 	cudaFree(img_blurred_d);
 	cudaFree(gaussian_kernel_d);
@@ -221,12 +228,19 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	cudaFree(img_sobel_x_d);
 	cudaFree(img_sobel_y_d);
 	cudaFree(img_harris_d);
-	cudaHostUnregister(img.data);
+	// Error checking
+	// cudaHostUnregister(img.data);
 	free(img_gray_h);
 	free(img_harris_h);
 	free(img_grayh2);
 	free(gaussian_kernel);
 	free(img_h);
+	cudaError_t err= cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in main kernels: %s\n", cudaGetErrorString(err));
+    }
+	
 }
 void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
 {
@@ -238,6 +252,7 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 	}
 	int desired_fps = 60;
 	int target_frame_time = 1000 / desired_fps;
+	int debug  = 0;
 	while (cap.isOpened())
 	{
 		int64 start_time = cv::getTickCount();
@@ -276,8 +291,9 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 		else
 		{
 			handle_image(mode, filename, low_threshold, high_threshold, true, img);
+			// free(img.data);
 		}
-
+		
 		int64 end_time = cv::getTickCount();
 		double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
 		cout << "FPS: " << 1000 / elapsed_time_ms << endl;
@@ -287,6 +303,10 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 		{
 			break;
 		}
+		// debug++;
+		// if(debug == 2){
+		// 	break;
+		// }
 	}
 }
 int main(const int argc, const char **argv)

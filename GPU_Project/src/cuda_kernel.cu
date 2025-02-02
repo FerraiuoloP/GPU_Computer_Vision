@@ -14,6 +14,7 @@ using namespace std;
 inline cudaError_t checkCuda(cudaError_t result)
 {
 #if defined(DEBUG) || defined(_DEBUG)
+    // printf("CUda result: %d\n", result);
     if (result != cudaSuccess)
     {
         fprintf(stderr, "CUDA Runtime Error: %s\n", cudaGetErrorString(result));
@@ -127,49 +128,54 @@ __global__ void vecDiv(float *A, float *B, float *C, int M, int N)
  * @param height Width of the image
  * @return __global__
  */
-__global__ void copy1ChannelTo3(float *src_img_d, unsigned char *dst_img_d, int width, int height)
+
+__global__ void copy1ChannelTo4(float *src_img_d, uchar4 *dst_img_d, int width, int height)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
+
     if (i < width && j < height)
     {
-        int idx = i * height + j;
-        int idx2 = 3 * idx;
-        dst_img_d[idx2] = (unsigned char)src_img_d[idx];
-        dst_img_d[idx2 + 1] = (unsigned char)src_img_d[idx];
-        dst_img_d[idx2 + 2] = (unsigned char)src_img_d[idx];
+        int idx = j * width + i; 
+        
+        unsigned char val = (unsigned char)src_img_d[idx]; 
+        
+        dst_img_d[idx] = make_uchar4(val, val, val, 255); 
     }
 }
 
-__global__ void cornerColoring(float *harris_map, unsigned char *dst_img_d, int width, int height, float threshold)
+__global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, int height, float threshold)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
+    
     if (i < width && j < height)
     {
-        int idx = i * height + j;
-        int idx2 = 3 * idx;
+        int idx = j * width + i; // Corrected indexing order (row-major)
+        
         if (harris_map[idx] > threshold && i > 2 && j > 2 && i < width - 2 && j < height - 2)
         {
-            // Coloring a single corner pixel in red
-            // dst_img_d[idx2] = 255;
-            // dst_img_d[idx2 + 1] = 0;
-            // dst_img_d[idx2 + 2] = 0;
-
-            // Coloring in a 3x3 window around the corner
+            // Coloring a 3x3 window around the detected corner
             for (int k = -1; k <= 1; k++)
             {
                 for (int z = -1; z <= 1; z++)
                 {
-                    int idx3 = idx2 + (k * width + z) * 3;
-                    dst_img_d[idx3] = 255;
-                    dst_img_d[idx3 + 1] = 0;
-                    dst_img_d[idx3 + 2] = 0;
+                    int new_i = i + k;
+                    int new_j = j + z;
+
+                    if (new_i >= 0 && new_j >= 0 && new_i < width && new_j < height)
+                    {
+                        int idx_neigh = new_j * width + new_i;
+                        dst_img_d[idx_neigh] = make_uchar4(255, 0, 0, 255); // Set to red (RGBA)
+                    }
+                 
+
                 }
             }
         }
     }
 }
+
 /***********************
  *
  * Convolution Kernels
@@ -1093,49 +1099,43 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
     cudaDeviceSynchronize();
 }
 
-void rgbToGrayKernelWrap(unsigned char* img_d, float* gray_d, int N, int M) {
-    // Allocate memory for padded uchar4 data
-    uchar4* padded_img_d;
-    cudaMalloc(&padded_img_d, N * M * sizeof(uchar4));
-
-    // Preprocess RGB data into padded uchar4 format on the host
-    uchar4* padded_img_h = new uchar4[N * M];
-    unsigned char* img_h = new unsigned char[N * M * 3];
-    cudaMemcpy(img_h, img_d, N * M * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
-
-    padRGBToUchar4(img_h, padded_img_h, N, M);
-
-    // Copy padded data to device
-    cudaMemcpy(padded_img_d, padded_img_h, N * M * sizeof(uchar4), cudaMemcpyHostToDevice);
+void rgbToGrayKernelWrap(uchar4* img_d, float* gray_d, int N, int M) {
+ 
+    
 
     // Launch kernel
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
 
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    checkCuda(cudaEventCreate(&start));
+    checkCuda(cudaEventCreate(&stop));
 
-    cudaEventRecord(start);
-    rgbToGrayKernel<<<grid, block>>>(padded_img_d, gray_d, N, M);
-    cudaEventRecord(stop);
+    checkCuda(cudaEventRecord(start));
 
-    cudaEventSynchronize(stop);
+    if (img_d == nullptr || gray_d == nullptr) {
+    fprintf(stderr, "Error: NULL pointer before kernel launch!\n");
+}
+
+
+    rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, N, M);
+    checkCuda(cudaEventRecord(stop));
+
+    checkCuda(cudaEventSynchronize(stop));
     float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    checkCuda(cudaEventElapsedTime(&milliseconds, start, stop));
     printf("Elapsed time: %f ms\n", milliseconds);
 
-    // Cleanup
-    delete[] padded_img_h;
-    cudaFree(padded_img_d);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
 
+    // cudaFree(img_d);
+    checkCuda(cudaEventDestroy(start));
+    checkCuda(cudaEventDestroy(stop));
+
+    checkCuda(cudaDeviceSynchronize());
     // Error checking
-    cudaDeviceSynchronize();
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        fprintf(stderr, "Error in kernel: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "Error in kernel RGB: %s\n", cudaGetErrorName(err));
     }
 }
 void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
@@ -1181,7 +1181,7 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventDestroy(stop);
 }
 
-void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
+void cannyMainKernelWrap(uchar4* img_data_h,uchar4* img_data_d,float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
     size_t img_size = width * height * sizeof(float);
     float milliseconds = 0;
@@ -1190,7 +1190,7 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
     float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug_h;
     float *output_d;
-    unsigned char *img_data_d;
+
     cudaEvent_t start, stop;
     cudaEvent_t start2, stop2;
     img_debug_h = (float *)malloc(img_size);
@@ -1204,7 +1204,7 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     cudaMalloc(&lbcs_img, img_size);
     cudaMalloc(&tts_img, img_size);
     cudaMalloc(&output_d, img_size);
-    cudaMalloc(&img_data_d, width * height * 3 * sizeof(unsigned char));
+    // cudaMalloc(&img_data_d, width * height * 3 * sizeof(unsigned char));
 
     // 1. Combining gradients to get magnitude and direction of each pixel
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
@@ -1234,20 +1234,26 @@ void cannyMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y
     printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
 
     // Copying img data from cv object to device, then overwriting it with the output of the kernel and copying it back to the host
-    cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
-    copy1ChannelTo3<<<grid, block>>>(output_d, img_data_d, width, height);
-    cudaMemcpy(img_data, img_data_d, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    // cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    copy1ChannelTo4<<<grid, block>>>(output_d, img_data_d, width, height);
+    cudaMemcpy(img_data_h, img_data_d, width * height * sizeof(uchar4), cudaMemcpyDeviceToHost);
 
     cudaFree(output_d);
     cudaFree(img_sobel);
     cudaFree(sobel_directions);
     cudaFree(lbcs_img);
     cudaFree(tts_img);
-    cudaFree(img_data_d);
+    // cudaFree(img_data_d);
     free(img_debug_h);
+
+    cudaError_t err= cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in canny kernel wrap: %s\n", cudaGetErrorString(err));
+    }
 }
 
-void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
+void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
     float milliseconds = 0;
@@ -1255,7 +1261,8 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
     float *output_d;
     float *max_value_d;
-    unsigned char *img_data_d;
+    
+  
     cudaStream_t streams[3];
     cudaEvent_t start, stop;
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
@@ -1276,7 +1283,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cudaMalloc(&traceM_d, n * sizeof(float));
     cudaMalloc(&output_d, n * sizeof(float));
     cudaMalloc(&max_value_d, sizeof(float));
-    cudaMalloc(&img_data_d, n * 3 * sizeof(unsigned char));
+   
 
     cudaMemcpy(max_value_d, &max_value_f, sizeof(float), cudaMemcpyHostToDevice);
 
@@ -1292,6 +1299,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     vecMul<<<gridSize, blockSize, 0, streams[1]>>>(sobel_y, sobel_y, Iy2_d, width, height);  // Iy^2
     vecMul<<<gridSize, blockSize, 0, streams[2]>>>(sobel_x, sobel_y, IxIy_d, width, height); // Ix * Iy
 
+ 
     // Synchronize streams
     cudaStreamSynchronize(streams[0]);
     cudaStreamSynchronize(streams[1]);
@@ -1328,12 +1336,15 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
         vecMul<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, IxIy_d2, width, height); // (IxIy)^2
         vecMul<<<gridSize, blockSize, 0, streams[1]>>>(Ix2_d, Iy2_d, detM_d, width, height);    // Ix2 * Iy2
         vecSub<<<gridSize, blockSize>>>(detM_d, IxIy_d2, detM_d, width, height);                // det(M)
-
+    
+   
         // 4. Compute trace(M) = Ix2 + Iy2
         vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
 
         // 5. Compute response R = det(M) / trace(M)
         vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output_d, width, height);
+
+   
     }
     else
     {
@@ -1346,6 +1357,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
 #pragma region 6. Non-maximum suppression on the Harris response
     cudaEventRecord(start);
     nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
+  
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1356,6 +1368,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cudaEventRecord(start);
 
     find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1368,6 +1381,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cudaEventRecord(start);
 
     find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+ 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1379,9 +1393,8 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
 #pragma endregion
 
 #pragma region 8. Corner thresholding
-    cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
     cornerColoring<<<gridSize, blockSize>>>(output_d, img_data_d, width, height, max_value_f * alpha);
-    cudaMemcpy(img_data, img_data_d, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    cudaMemcpy(img_data_h, img_data_d, width * height * sizeof(uchar4), cudaMemcpyDeviceToHost);
 #pragma endregion
 
 #pragma region Cleanup
@@ -1393,7 +1406,7 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cudaFree(traceM_d);
     cudaFree(output_d);
     cudaFree(max_value_d);
-    cudaFree(img_data_d);
+    // cudaFree(img_data_d);
 
     cudaStreamDestroy(streams[0]);
     cudaStreamDestroy(streams[1]);
@@ -1402,4 +1415,10 @@ void harrisMainKernelWrap(unsigned char *img_data, float *sobel_x, float *sobel_
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 #pragma endregion
+
+cudaError_t err= cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in harris kernel wrap: %s\n", cudaGetErrorString(err));
+    }
 }
