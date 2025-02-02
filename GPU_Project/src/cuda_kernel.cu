@@ -385,19 +385,28 @@ __global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, f
  * @param M
  * @return __global__
  */
-__global__ void rgbToGrayKernel(unsigned char *img_d, float *gray_d, int width, int height)
-{
+__global__ void rgbToGrayKernel(const uchar4* img_d, float* gray_d, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x < width && y < height)
-    {
-        int idx = x * height + y;
-        int idx2 = 3 * idx;
-        float r = (float)(img_d[idx2]) * 0.299;
-        float g = (float)(img_d[idx2 + 1]) * 0.587;
-        float b = (float)(img_d[idx2 + 2]) * 0.114;
+    if (x < width && y < height) {
+        int idx = y * width + x;
+        uchar4 pixel = img_d[idx];
+        gray_d[idx] = 0.299f * pixel.x + 0.587f * pixel.y + 0.114f * pixel.z;
+    }
+}
 
-        gray_d[idx] = (r + g + b);
+void padRGBToUchar4(const unsigned char* rgb_data, uchar4* padded_data, int width, int height) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = y * width + x;
+            int rgb_idx = 3 * idx;
+            padded_data[idx] = make_uchar4(
+                rgb_data[rgb_idx],     // R
+                rgb_data[rgb_idx + 1], // G
+                rgb_data[rgb_idx + 2], // B
+                0                      // Padding (alpha)
+            );
+        }
     }
 }
 
@@ -1084,34 +1093,51 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
     cudaDeviceSynchronize();
 }
 
-void rgbToGrayKernelWrap(unsigned char *img_d, float *gray_d, int N, int M)
-{
+void rgbToGrayKernelWrap(unsigned char* img_d, float* gray_d, int N, int M) {
+    // Allocate memory for padded uchar4 data
+    uchar4* padded_img_d;
+    cudaMalloc(&padded_img_d, N * M * sizeof(uchar4));
+
+    // Preprocess RGB data into padded uchar4 format on the host
+    uchar4* padded_img_h = new uchar4[N * M];
+    unsigned char* img_h = new unsigned char[N * M * 3];
+    cudaMemcpy(img_h, img_d, N * M * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+
+    padRGBToUchar4(img_h, padded_img_h, N, M);
+
+    // Copy padded data to device
+    cudaMemcpy(padded_img_d, padded_img_h, N * M * sizeof(uchar4), cudaMemcpyHostToDevice);
+
+    // Launch kernel
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+
     cudaEvent_t start, stop;
-    float milliseconds = 0;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
-    rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, N, M);
+    rgbToGrayKernel<<<grid, block>>>(padded_img_d, gray_d, N, M);
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
+    float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for RGB to Gray: %f ms\n", milliseconds);
+    printf("Elapsed time: %f ms\n", milliseconds);
 
-    // printDebugArr(gray_d, 10, (char *)"gray_d");
-    cudaDeviceSynchronize();
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-    {
-        fprintf(stderr, "Error in kernel RGB: %s\n", cudaGetErrorString(err));
-    }
+    // Cleanup
+    delete[] padded_img_h;
+    cudaFree(padded_img_d);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-}
 
+    // Error checking
+    cudaDeviceSynchronize();
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error in kernel: %s\n", cudaGetErrorString(err));
+    }
+}
 void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
 {
     const dim3 blockSize(16, 16, 1);
@@ -1137,6 +1163,7 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
+    
     convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h, d_kernel);
     cudaEventRecord(stop);
 
