@@ -136,11 +136,11 @@ __global__ void copy1ChannelTo4(float *src_img_d, uchar4 *dst_img_d, int width, 
 
     if (i < width && j < height)
     {
-        int idx = j * width + i; 
-        
-        unsigned char val = (unsigned char)src_img_d[idx]; 
-        
-        dst_img_d[idx] = make_uchar4(val, val, val, 255); 
+        int idx = j * width + i;
+
+        unsigned char val = (unsigned char)src_img_d[idx];
+
+        dst_img_d[idx] = make_uchar4(val, val, val, 255);
     }
 }
 
@@ -148,11 +148,11 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (i < width && j < height)
     {
         int idx = j * width + i; // Corrected indexing order (row-major)
-        
+
         if (harris_map[idx] > threshold && i > 2 && j > 2 && i < width - 2 && j < height - 2)
         {
             // Coloring a 3x3 window around the detected corner
@@ -168,8 +168,6 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
                         int idx_neigh = new_j * width + new_i;
                         dst_img_d[idx_neigh] = make_uchar4(255, 0, 0, 255); // Set to red (RGBA)
                     }
-                 
-
                 }
             }
         }
@@ -248,45 +246,55 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
 // Border around the shared memory
 #define ROW_HALO_STEPS 1
 
-__global__ void rowConvolution(float *result_d, float *data_d, int width, int height, float *kernel_d)
+__global__ void rowConvolution(float *data_d, float *result_d, int width, int height, float *kernel_d)
 {
-    __shared__ float data[TILE_WIDTH][(ROW_THREAD_STEPS + 2 * ROW_HALO_STEPS) * TILE_WIDTH];
+    // Added +1 to shared memory width to prevent out-of-bounds access
+    __shared__ float data[TILE_WIDTH][(ROW_THREAD_STEPS + 2 * ROW_HALO_STEPS) * TILE_WIDTH + 1];
 
-    // X position, shifted by the border(HALO STEPS), multiplied by ROW_THREAD_STEPS(how many convolution results the thread computes)
     const int x0 = (blockIdx.x * ROW_THREAD_STEPS - ROW_HALO_STEPS) * TILE_WIDTH + threadIdx.x;
     const int y0 = blockIdx.y * blockDim.y + threadIdx.y;
 
-    // Adjusting the pointers to the correct position by adding the y0 and x0 offsets
     result_d += y0 * width + x0;
     data_d += y0 * width + x0;
 
-// Loading main data
+    // Loading main data with boundary checks
 #pragma unroll
     for (int i = ROW_HALO_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS; i++)
     {
-        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = data_d[i * TILE_WIDTH];
+        int x = x0 + i * TILE_WIDTH;
+        int y = y0;
+        bool in_bounds = (x >= 0) && (x < width) && (y >= 0) && (y < height);
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] =
+            in_bounds ? data_d[i * TILE_WIDTH] : 0.0f;
     }
 
-// Loading left halo
+    // Loading left halo with full boundary checks
 #pragma unroll
     for (int i = 0; i < ROW_HALO_STEPS; i++)
     {
-        // if at the image (left)border, load 0
-        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = (x0 >= 0) ? data_d[i * TILE_WIDTH] : 0.0f;
+        int x = x0 + i * TILE_WIDTH;
+        int y = y0;
+        bool in_bounds = (x >= 0) && (x < width) && (y >= 0) && (y < height);
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] =
+            in_bounds ? data_d[i * TILE_WIDTH] : 0.0f;
     }
 
-// Loading right halo
+    // Loading right halo with full boundary checks
 #pragma unroll
-    for (int i = ROW_HALO_STEPS + ROW_THREAD_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS + ROW_HALO_STEPS; i++)
+    for (int i = ROW_HALO_STEPS + ROW_THREAD_STEPS;
+         i < ROW_HALO_STEPS + ROW_THREAD_STEPS + ROW_HALO_STEPS;
+         i++)
     {
-        // if x0 + row kernel size is greater than width, load 0(we are at the right border)
-        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] = (width - x0 > i * TILE_WIDTH) ? data_d[i * TILE_WIDTH] : 0.0f;
+        int x = x0 + i * TILE_WIDTH;
+        int y = y0;
+        bool in_bounds = (x >= 0) && (x < width) && (y >= 0) && (y < height);
+        data[threadIdx.y][threadIdx.x + i * TILE_WIDTH] =
+            in_bounds ? data_d[i * TILE_WIDTH] : 0.0f;
     }
 
-    // Syncrhonizing so that all data is loaded
     __syncthreads();
 
-// Actually computing the convolution
+    // Compute convolution with write boundary checks
 #pragma unroll
     for (int i = ROW_HALO_STEPS; i < ROW_HALO_STEPS + ROW_THREAD_STEPS; i++)
     {
@@ -296,15 +304,19 @@ __global__ void rowConvolution(float *result_d, float *data_d, int width, int he
         {
             sum += data[threadIdx.y][threadIdx.x + i * TILE_WIDTH + j] * kernel_d[FILTER_RADIUS + j];
         }
-        result_d[i * TILE_WIDTH] = sum;
+        int x = x0 + i * TILE_WIDTH;
+        int y = y0;
+        if (x >= 0 && x < width && y >= 0 && y < height)
+        {
+            result_d[i * TILE_WIDTH] = sum;
+        }
     }
 }
-
 // How many results a thread computes per convolution
 #define COL_THREAD_STEPS 8
 // Border around the shared memory
 #define COL_HALO_STEPS 1
-__global__ void columnConvolution(float *result_d, float *data_d, int width, int height, float *kernel_d)
+__global__ void columnConvolution(float *data_d, float *result_d, int width, int height, float *kernel_d)
 {
     __shared__ float data[TILE_WIDTH][(COL_THREAD_STEPS + 2 * COL_HALO_STEPS) * TILE_WIDTH + 1];
 
@@ -318,26 +330,41 @@ __global__ void columnConvolution(float *result_d, float *data_d, int width, int
 #pragma unroll
     for (int i = COL_HALO_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS; i++)
     {
-        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = data_d[i * TILE_WIDTH * width];
+        int y_access = y0 + i * TILE_WIDTH;
+        int x_access = x0;
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] =
+            (y_access >= 0 && y_access < height && x_access < width)
+                ? data_d[i * TILE_WIDTH * width]
+                : 0.0f;
     }
 
     // Loading top halo
 #pragma unroll
     for (int i = 0; i < COL_HALO_STEPS; i++)
     {
-        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = (y0 >= 0) ? data_d[i * TILE_WIDTH * width] : 0.0f;
+        int y_access = y0 + i * TILE_WIDTH;
+        int x_access = x0;
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] =
+            (y_access >= 0 && y_access < height && x_access < width)
+                ? data_d[i * TILE_WIDTH * width]
+                : 0.0f;
     }
 
     // Loading bottom halo
 #pragma unroll
     for (int i = COL_HALO_STEPS + COL_THREAD_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS + COL_HALO_STEPS; i++)
     {
-        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] = (height - y0 > i * TILE_WIDTH) ? data_d[i * TILE_WIDTH * width] : 0.0f;
+        int y_access = y0 + i * TILE_WIDTH;
+        int x_access = x0;
+        data[threadIdx.x][threadIdx.y + i * TILE_WIDTH] =
+            (y_access >= 0 && y_access < height && x_access < width)
+                ? data_d[i * TILE_WIDTH * width]
+                : 0.0f;
     }
 
     __syncthreads();
 
-    // Actually computing the convolution
+    // Computing convolution
 #pragma unroll
     for (int i = COL_HALO_STEPS; i < COL_HALO_STEPS + COL_THREAD_STEPS; i++)
     {
@@ -347,7 +374,11 @@ __global__ void columnConvolution(float *result_d, float *data_d, int width, int
         {
             sum += data[threadIdx.x][threadIdx.y + i * TILE_WIDTH + j] * kernel_d[FILTER_RADIUS + j];
         }
-        result_d[i * TILE_WIDTH * width] = sum;
+        int y = y0 + i * TILE_WIDTH;
+        if (y >= 0 && y < height && x0 < width)
+        {
+            result_d[i * TILE_WIDTH * width] = sum;
+        }
     }
 }
 // Simple not-optimized convolution kernel
@@ -391,19 +422,24 @@ __global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, f
  * @param M
  * @return __global__
  */
-__global__ void rgbToGrayKernel(const uchar4* img_d, float* gray_d, int width, int height) {
+__global__ void rgbToGrayKernel(const uchar4 *img_d, float *gray_d, int width, int height)
+{
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x < width && y < height) {
+    if (x < width && y < height)
+    {
         int idx = y * width + x;
         uchar4 pixel = img_d[idx];
         gray_d[idx] = 0.299f * pixel.x + 0.587f * pixel.y + 0.114f * pixel.z;
     }
 }
 
-void padRGBToUchar4(const unsigned char* rgb_data, uchar4* padded_data, int width, int height) {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
+void padRGBToUchar4(const unsigned char *rgb_data, uchar4 *padded_data, int width, int height)
+{
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
             int idx = y * width + x;
             int rgb_idx = 3 * idx;
             padded_data[idx] = make_uchar4(
@@ -1088,20 +1124,75 @@ void printDebugArr(float *arr_d, int n, char *stringa)
     free(arr_h);
 }
 
-void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, int height, float *kernel_x, float *kernel_y, int kernel_size)
+/**
+ * @brief Apply a separable convolution on the input image using the given kernel.
+ *
+ * @param img_d Input image
+ * @param img_out_d Output image
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param kernel_x Kernel in the x direction
+ * @param kernel_y Kernel in the y direction
+ * @param kernel_size Size of the kernel
+ */
+void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, int height,
+                                    float *kernel_x, float *kernel_y, int kernel_size)
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
-    const dim3 gridSize(width / TILE_WIDTH + 1, height / TILE_WIDTH + 1);
-    rowConvolution<<<gridSize, blockSize>>>(img_d, img_out_d, width, height, kernel_x);
+
+    // 1. FIXED GRID DIMENSIONS -----------------------------------------------
+    // Row convolution grid (handles ROW_THREAD_STEPS elements per thread block)
+    const dim3 gridSize_row(
+        (width + TILE_WIDTH * ROW_THREAD_STEPS - 1) / (TILE_WIDTH * ROW_THREAD_STEPS),
+        (height + TILE_WIDTH - 1) / TILE_WIDTH // Ceiling division for height
+    );
+
+    // Column convolution grid (handles COL_THREAD_STEPS elements per thread block)
+    const dim3 gridSize_col(
+        (width + TILE_WIDTH - 1) / TILE_WIDTH, // Ceiling division for width
+        (height + TILE_WIDTH * COL_THREAD_STEPS - 1) / (TILE_WIDTH * COL_THREAD_STEPS));
+    // -------------------------------------------------------------------------
+
+    float *img_temp_d;
+    cudaMalloc(&img_temp_d, width * height * sizeof(float));
+
+    // 2. KERNEL COMPATIBILITY CHECK -------------------------------------------
+    const int filter_radius = (kernel_size - 1) / 2;
+    if (filter_radius > ROW_HALO_STEPS * TILE_WIDTH ||
+        filter_radius > COL_HALO_STEPS * TILE_WIDTH)
+    {
+        fprintf(stderr, "Kernel radius too large for halo configuration!\n");
+        cudaFree(img_temp_d);
+        return;
+    }
+    // -------------------------------------------------------------------------
+
+    // Launch row convolution with corrected grid
+    rowConvolution<<<gridSize_row, blockSize>>>(img_d, img_temp_d, width, height, kernel_x);
     cudaDeviceSynchronize();
 
-    columnConvolution<<<gridSize, blockSize>>>(img_out_d, img_d, width, height, kernel_y);
+    // Error check
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in kernel ROW: %s\n", cudaGetErrorString(err));
+    }
+
+    // Launch column convolution with corrected grid
+    columnConvolution<<<gridSize_col, blockSize>>>(img_temp_d, img_out_d, width, height, kernel_y);
     cudaDeviceSynchronize();
+
+    // Error check
+    err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in kernel COL: %s\n", cudaGetErrorString(err));
+    }
+
+    cudaFree(img_temp_d);
 }
-
-void rgbToGrayKernelWrap(uchar4* img_d, float* gray_d, int N, int M) {
- 
-    
+void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
+{
 
     // Launch kernel
     dim3 block(TILE_WIDTH, TILE_WIDTH);
@@ -1113,10 +1204,10 @@ void rgbToGrayKernelWrap(uchar4* img_d, float* gray_d, int N, int M) {
 
     checkCuda(cudaEventRecord(start));
 
-    if (img_d == nullptr || gray_d == nullptr) {
-    fprintf(stderr, "Error: NULL pointer before kernel launch!\n");
-}
-
+    if (img_d == nullptr || gray_d == nullptr)
+    {
+        fprintf(stderr, "Error: NULL pointer before kernel launch!\n");
+    }
 
     rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, N, M);
     checkCuda(cudaEventRecord(stop));
@@ -1126,7 +1217,6 @@ void rgbToGrayKernelWrap(uchar4* img_d, float* gray_d, int N, int M) {
     checkCuda(cudaEventElapsedTime(&milliseconds, start, stop));
     printf("Elapsed time: %f ms\n", milliseconds);
 
-
     // cudaFree(img_d);
     checkCuda(cudaEventDestroy(start));
     checkCuda(cudaEventDestroy(stop));
@@ -1134,7 +1224,8 @@ void rgbToGrayKernelWrap(uchar4* img_d, float* gray_d, int N, int M) {
     checkCuda(cudaDeviceSynchronize());
     // Error checking
     cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
+    if (err != cudaSuccess)
+    {
         fprintf(stderr, "Error in kernel RGB: %s\n", cudaGetErrorName(err));
     }
 }
@@ -1163,7 +1254,7 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
-    
+
     convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h, d_kernel);
     cudaEventRecord(stop);
 
@@ -1181,7 +1272,7 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventDestroy(stop);
 }
 
-void cannyMainKernelWrap(uchar4* img_data_h,uchar4* img_data_d,float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
+void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
     size_t img_size = width * height * sizeof(float);
     float milliseconds = 0;
@@ -1246,14 +1337,14 @@ void cannyMainKernelWrap(uchar4* img_data_h,uchar4* img_data_d,float *sobel_x, f
     // cudaFree(img_data_d);
     free(img_debug_h);
 
-    cudaError_t err= cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Error in canny kernel wrap: %s\n", cudaGetErrorString(err));
     }
 }
 
-void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
+void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
     float milliseconds = 0;
@@ -1261,8 +1352,7 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
     float *output_d;
     float *max_value_d;
-    
-  
+
     cudaStream_t streams[3];
     cudaEvent_t start, stop;
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
@@ -1283,7 +1373,6 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
     cudaMalloc(&traceM_d, n * sizeof(float));
     cudaMalloc(&output_d, n * sizeof(float));
     cudaMalloc(&max_value_d, sizeof(float));
-   
 
     cudaMemcpy(max_value_d, &max_value_f, sizeof(float), cudaMemcpyHostToDevice);
 
@@ -1299,7 +1388,6 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
     vecMul<<<gridSize, blockSize, 0, streams[1]>>>(sobel_y, sobel_y, Iy2_d, width, height);  // Iy^2
     vecMul<<<gridSize, blockSize, 0, streams[2]>>>(sobel_x, sobel_y, IxIy_d, width, height); // Ix * Iy
 
- 
     // Synchronize streams
     cudaStreamSynchronize(streams[0]);
     cudaStreamSynchronize(streams[1]);
@@ -1336,15 +1424,12 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
         vecMul<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, IxIy_d2, width, height); // (IxIy)^2
         vecMul<<<gridSize, blockSize, 0, streams[1]>>>(Ix2_d, Iy2_d, detM_d, width, height);    // Ix2 * Iy2
         vecSub<<<gridSize, blockSize>>>(detM_d, IxIy_d2, detM_d, width, height);                // det(M)
-    
-   
+
         // 4. Compute trace(M) = Ix2 + Iy2
         vecAdd<<<gridSize, blockSize>>>(Ix2_d, Iy2_d, traceM_d, width, height); // trace(M)
 
         // 5. Compute response R = det(M) / trace(M)
         vecDiv<<<gridSize, blockSize>>>(detM_d, traceM_d, output_d, width, height);
-
-   
     }
     else
     {
@@ -1357,7 +1442,7 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
 #pragma region 6. Non-maximum suppression on the Harris response
     cudaEventRecord(start);
     nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
-  
+
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1381,7 +1466,7 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
     cudaEventRecord(start);
 
     find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
- 
+
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1416,7 +1501,7 @@ void harrisMainKernelWrap(uchar4* img_data_h, uchar4 *img_data_d, float *sobel_x
     cudaEventDestroy(stop);
 #pragma endregion
 
-cudaError_t err= cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Error in harris kernel wrap: %s\n", cudaGetErrorString(err));

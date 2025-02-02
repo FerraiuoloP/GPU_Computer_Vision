@@ -14,10 +14,14 @@ using namespace cv;
 using namespace std;
 
 const float sobel_x_kernel[9] = {1, 0, -1, 2, 0, -2, 1, 0, -1};
+
 const float sobel_x_separable[3] = {1, 2, 1};
+const float sobel_x_separable_2[3] = {1, 0, -1};
 
 const float sobel_y_kernel[9] = {1, 2, 1, 0, 0, 0, -1, -2, -1};
-const float sobel_y_separable[3] = {-1, 0, 1};
+
+const float sobel_y_separable[3] = {1, 0, -1};
+const float sobel_y_separable_2[3] = {1, 2, 1};
 enum Mode
 {
 	// -H. Normal Harris Corner Detection
@@ -58,7 +62,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	if (!from_video)
 	{
 		img = cv::imread(filename, cv::IMREAD_COLOR);
-	
+
 		if (img.empty())
 		{
 			std::cerr << "Error: Unable to load image." << std::endl;
@@ -82,7 +86,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	printf("Image size: %d x %d \n", width, height);
 
 	// device variable declarations
-	uchar4* img_d;
+	uchar4 *img_d;
 	float *img_gray_d;
 	float *img_blurred_d;
 	float *img_harris_d;
@@ -98,8 +102,10 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// kernel devices
 	float *sobel_x_kernel_d;
 	float *sobel_x_separable_d;
+	float *sobel_x_separable_2_d;
 	float *sobel_y_kernel_d;
 	float *sobel_y_separable_d;
+	float *sobel_y_separable_2_d;
 
 	float *gaussian_kernel = computeGaussianKernel(FILTER_WIDTH, FILTER_SIGMA);
 	float *gaussian_kernel_d;
@@ -108,13 +114,14 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// memcpy(img_h, img.data, img_size_h);
 
 	// cuda memory allocations
-	
+
 	cudaMalloc(&img_d, img_size_h);
 	cudaMalloc(&img_gray_d, img_gray_size_h);
 	cudaMalloc(&img_blurred_d, img_gray_size_h);
 	cudaMalloc(&gaussian_kernel_d, FILTER_WIDTH * FILTER_WIDTH * sizeof(float));
 	cudaMalloc(&sobel_x_kernel_d, 3 * 3 * sizeof(float));
 	cudaMalloc(&sobel_x_separable_d, 3 * sizeof(float));
+	cudaMalloc(&sobel_x_separable_2_d, 3 * sizeof(float));
 	cudaMalloc(&sobel_y_kernel_d, 3 * 3 * sizeof(float));
 	cudaMalloc(&sobel_y_separable_d, 3 * sizeof(float));
 	cudaMalloc(&img_sobel_x_d, img_gray_size_h);
@@ -126,8 +133,14 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// cudaHostRegister(img.data, img_size_h, cudaHostRegisterPortable);
 	cudaMemcpy(img_d, img.data, img_size_h, cudaMemcpyHostToDevice);
 	cudaMemcpy(gaussian_kernel_d, gaussian_kernel, FILTER_WIDTH * FILTER_WIDTH * sizeof(float), cudaMemcpyHostToDevice);
+
 	cudaMemcpy(sobel_x_kernel_d, sobel_x_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(sobel_y_kernel_d, sobel_y_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
+
+	cudaMemcpy(sobel_x_separable_d, sobel_x_separable, 3 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(sobel_x_separable_2_d, sobel_x_separable_2, 3 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(sobel_y_separable_d, sobel_y_separable, 3 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(sobel_y_separable_2_d, sobel_y_separable_2, 3 * sizeof(float), cudaMemcpyHostToDevice);
 
 	// Commong operations for all modes(except for OTSU_BIN)
 
@@ -143,29 +156,37 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// Sobel X
 	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d);
-	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_x_d, width, height, sobel_x_separable_d, sobel_x_separable_d, 3);
+	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_x_d, width, height, sobel_x_separable_2_d, sobel_x_separable_d, 3);
+	// float *img_sobel_x_h = (float *)malloc(img_gray_size_h);
+	// cudaMemcpy(img_sobel_x_h, img_sobel_x_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// showImage(height, width, img_sobel_x_h, "Sobel X");
+
 	// Sobel Y
 	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d);
+	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_y_d, width, height, sobel_x_separable_d, sobel_x_separable_2_d, 3);
+	// float *img_sobel_y_h = (float *)malloc(img_gray_size_h);
+	// cudaMemcpy(img_sobel_y_h, img_sobel_y_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// showImage(height, width, img_sobel_y_h, "Sobel Y");
 
 	// Exeuting the CV task based on the mode
 	switch (mode)
 	{
 	case HARRIS:
-	
+
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
-		harrisMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
+		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
 		break;
 	case SHI_TOMASI:
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
-		harrisMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
 		break;
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_MANUAL:
-		cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_GUI:
 	{
@@ -176,7 +197,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		cv::createTrackbar("Threshold Low", "Output Image", &thresh_l, 255);
 		while (true)
 		{
-			cannyMainKernelWrap((uchar4*)img.data,img_d, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
+			cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
 			cv::imshow("Output Image", img);
 			if (cv::waitKey(1) == 27) // wait to press 'esc' key
 			{
@@ -219,12 +240,14 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 
 	// (cuda)memory deallocations
 	cudaFree(img_d);
-   
+
 	cudaFree(img_gray_d);
 	cudaFree(img_blurred_d);
 	cudaFree(gaussian_kernel_d);
 	cudaFree(sobel_x_kernel_d);
 	cudaFree(sobel_y_kernel_d);
+	cudaFree(sobel_x_separable_d);
+	cudaFree(sobel_x_separable_2_d);
 	cudaFree(img_sobel_x_d);
 	cudaFree(img_sobel_y_d);
 	cudaFree(img_harris_d);
@@ -235,12 +258,11 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	free(img_grayh2);
 	free(gaussian_kernel);
 	free(img_h);
-	cudaError_t err= cudaGetLastError();
-    if (err != cudaSuccess)
-    {
-        fprintf(stderr, "Error in main kernels: %s\n", cudaGetErrorString(err));
-    }
-	
+	cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess)
+	{
+		fprintf(stderr, "Error in main kernels: %s\n", cudaGetErrorString(err));
+	}
 }
 void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
 {
@@ -252,7 +274,7 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 	}
 	int desired_fps = 60;
 	int target_frame_time = 1000 / desired_fps;
-	int debug  = 0;
+	int debug = 0;
 	while (cap.isOpened())
 	{
 		int64 start_time = cv::getTickCount();
@@ -293,7 +315,7 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 			handle_image(mode, filename, low_threshold, high_threshold, true, img);
 			// free(img.data);
 		}
-		
+
 		int64 end_time = cv::getTickCount();
 		double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
 		cout << "FPS: " << 1000 / elapsed_time_ms << endl;
