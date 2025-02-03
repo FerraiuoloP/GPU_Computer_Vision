@@ -124,6 +124,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	cudaMalloc(&sobel_x_separable_2_d, 3 * sizeof(float));
 	cudaMalloc(&sobel_y_kernel_d, 3 * 3 * sizeof(float));
 	cudaMalloc(&sobel_y_separable_d, 3 * sizeof(float));
+	cudaMalloc(&sobel_y_separable_2_d, 3 * sizeof(float));
 	cudaMalloc(&img_sobel_x_d, img_gray_size_h);
 	cudaMalloc(&img_sobel_y_d, img_gray_size_h);
 	cudaMalloc(&img_harris_d, img_gray_size_h);
@@ -215,7 +216,6 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// Showing the result
 	if (mode != CANNY_GUI)
 	{
-
 		cv::Mat img_out;
 		// Since otsu binarization is done on the grayscale image, we need to convert it to 8UC1(8 unsigned char 1 channel) before displaying
 		if (mode == OTSU_BIN)
