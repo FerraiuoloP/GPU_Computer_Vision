@@ -189,38 +189,47 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
  * @param kernel_d Convolution kernel
  * @return __global__
  */
-__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, float *kernel_d)
+
+__constant__ float d_Kernel[9];
+
+
+__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height)
 {
-    // Shared memory for the tile and its border
-    __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
+    // Define shared memory dimensions
+    const int SHARED_WIDTH = TILE_WIDTH + 2 * (FILTER_WIDTH / 2); // assuming FILTER_WIDTH is odd
+    __shared__ float data_flat[SHARED_WIDTH * SHARED_WIDTH];
 
     // Calculate global memory location of this thread
     const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
     const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
     const int gLoc = x0 + y0 * width;
 
-    // Load corners into shared memory
+    // Load corners into shared memory (example for one corner)
     if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
     {
         // Top-left corner
         int x = x0 - 1;
         int y = y0 - 1;
-        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
+        int flatIndex = threadIdx.y * SHARED_WIDTH + threadIdx.x;
+        data_flat[flatIndex] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
 
         // Top-right corner
         x = x0 + 1;
         y = y0 - 1;
-        data[threadIdx.y][threadIdx.x + 2] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
+        flatIndex = threadIdx.y * SHARED_WIDTH + (threadIdx.x + 2);
+        data_flat[flatIndex] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
 
         // Bottom-left corner
         x = x0 - 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
+        flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + threadIdx.x;
+        data_flat[flatIndex] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
 
         // Bottom-right corner
         x = x0 + 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
+        flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + (threadIdx.x + 2);
+        data_flat[flatIndex] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
     }
 
     __syncthreads();
@@ -229,18 +238,19 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
     if (x0 < width && y0 < height)
     {
         float sum = 0.0f;
+        #pragma unroll
         for (int i = -FILTER_RADIUS; i <= FILTER_RADIUS; ++i)
         {
+            #pragma unroll
             for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; ++j)
             {
-                sum += data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] *
-                       kernel_d[(i + 1) * 3 + (j + 1)];
+                int flatIndex = (threadIdx.y + 1 + i) * SHARED_WIDTH + (threadIdx.x + 1 + j);
+                sum += data_flat[flatIndex] * d_Kernel[(i + FILTER_RADIUS) * FILTER_WIDTH + (j + FILTER_RADIUS)];
             }
         }
         result_d[gLoc] = sum;
     }
 }
-
 // How many results a thread computes per convolution
 #define ROW_THREAD_STEPS 8
 // Border around the shared memory
@@ -1253,9 +1263,11 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+    cudaMemcpyToSymbol(d_Kernel, d_kernel, 9 * sizeof(float), 0, cudaMemcpyDeviceToDevice);
+
     cudaEventRecord(start);
 
-    convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h, d_kernel);
+    convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h);
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
