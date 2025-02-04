@@ -4,6 +4,9 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+// include PI
+#include <cmath>
+
 using namespace std;
 using namespace cv;
 float *computeGaussianKernel(int filterWidth, float filterSigma)
@@ -20,6 +23,7 @@ float *computeGaussianKernel(int filterWidth, float filterSigma)
         for (int c = -filterWidth / 2; c <= filterWidth / 2; ++c)
         {
             float filterValue = expf(-(float)(c * c + r * r) / (2.f * filterSigma * filterSigma));
+            filterValue = filterValue / (2.f * M_PI * filterSigma * filterSigma);
             (host_filter)[(r + filterWidth / 2) * filterWidth + c + filterWidth / 2] = filterValue;
             filterSum += filterValue;
         }
