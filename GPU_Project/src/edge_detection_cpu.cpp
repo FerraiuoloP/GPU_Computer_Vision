@@ -10,6 +10,8 @@
 using namespace std;
 using namespace cv;
 
+#define MEASURE_TIME 1
+
 void showImageCPU(cv::Mat img)
 {
     cv::Mat displayImage1;
@@ -29,7 +31,9 @@ cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int 
     int pad = kernelSize / 2;
 
     cv::Mat outputImage = cv::Mat::zeros(inputImage.size(), inputImage.type());
-
+#ifdef MEASURE_TIME
+    double start = cv::getTickCount();
+#endif
     for (int y = pad; y < inputImage.rows - pad; y++)
     {
         for (int x = pad; x < inputImage.cols - pad; x++)
@@ -53,9 +57,15 @@ cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int 
             outputImage.at<float>(y, x) = float(pixelValue);
         }
     }
+#ifdef MEASURE_TIME
+    double end = cv::getTickCount();
+    double time = (end - start) / cv::getTickFrequency();
+    cout << "Convolution CPU time: " << time * 1000 << "ms" << endl;
+#endif
 
     return outputImage;
 }
+
 int otsuThreshold(cv::Mat &image);
 int otsuThreshold(cv::Mat &image)
 {
@@ -116,18 +126,22 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
             img_gray.at<float>(i, j) = 0.299 * float(pixel[0]) + 0.587 * float(pixel[1]) + 0.114 * float(pixel[2]);
         }
     }
+    cv::imwrite("debug/gray_cpu.jpg", img_gray);
     // showImage(img_gray);
 
     // apply Gaussian Blur
     cv::Mat img_blurred(img_gray.rows, img_gray.cols, CV_32F);
     img_blurred = applyConvolutionCPU(img_gray, gaussian_kernel, FILTER_WIDTH);
+    cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
 
     // showImage(img_blurred);
 
     // computing the sobel x and y gradients
     cv::Mat sobel_x, sobel_y;
     sobel_x = applyConvolutionCPU(img_blurred, sobel_x_kernel, 3);
+    cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
     sobel_y = applyConvolutionCPU(img_blurred, sobel_y_kernel, 3);
+    cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
 
     // Computing harris response map
     cv::Mat img_harris = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
@@ -141,10 +155,21 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
             float det = Ix2 * Iy2 - Ixy * Ixy;
             float trace = Ix2 + Iy2;
             // img_harris.at<float>(i, j) = det - 0.05 * trace * trace;
-            img_harris.at<float>(i, j) = det / (trace + 0.00000001);
+            if (trace != 0)
+            {
+
+                img_harris.at<float>(i, j) = det / (trace);
+            }
+            else
+            {
+                img_harris.at<float>(i, j) = 0;
+            }
             // cout << img_harris.at<float>(i, j) << endl;
         }
     }
+
+    // save harris response map
+    cv::imwrite("debug/harris_cpu.jpg", img_harris);
 
     // normalize the image
     // cv::normalize(img_harris, img_harris, 0, 1, cv::NORM_MINMAX);
@@ -178,18 +203,18 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
     {
         for (int j = 1; j < img_harris.cols - 1; j++)
         {
-            float max = 0;
+            float local_max = -10000;
             for (int k = -1; k <= 1; k++)
             {
                 for (int l = -1; l <= 1; l++)
                 {
-                    if (img_harris.rows > i + k && img_harris.cols > j + l && i + k >= 0 && j + l >= 0 && img_harris.at<float>(i + k, j + l) > max)
+                    if (img_harris.rows > i + k && img_harris.cols > j + l && i + k >= 0 && j + l >= 0 && img_harris.at<float>(i + k, j + l) > local_max)
                     {
-                        max = img_harris.at<float>(i + k, j + l);
+                        local_max = img_harris.at<float>(i + k, j + l);
                     }
                 }
             }
-            if (img_harris.at<float>(i, j) < max)
+            if (img_harris.at<float>(i, j) < local_max)
             {
                 img_harris.at<float>(i, j) = 0;
             }
@@ -202,7 +227,7 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
         for (int j = 0; j < img_harris.cols; j++)
         {
             // if the pixel is a corner
-            if (img_harris.at<float>(i, j) > 0.035 * max)
+            if (img_harris.at<float>(i, j) > 0.03 * max)
             {
                 // color 2x2 pixels
                 for (int k = -1; k <= 1; k++)
@@ -239,6 +264,7 @@ cv::Mat otsuBinarization(cv::Mat *img)
 
     // otsu thresholding
     int threshold = otsuThreshold(img_gray);
+    // cout << "Threshold: " << threshold << endl;
 
     // binarize the image
     for (int i = 0; i < img_gray.rows; i++)
@@ -271,15 +297,19 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
             img_gray.at<float>(i, j) = 0.299 * float(pixel[0]) + 0.587 * float(pixel[1]) + 0.114 * float(pixel[2]);
         }
     }
+    cv::imwrite("debug/gray_cpu.jpg", img_gray);
 
     // apply Gaussian Blur
     cv::Mat img_blurred(img_gray.rows, img_gray.cols, CV_32F);
     img_blurred = applyConvolutionCPU(img_gray, gaussian_kernel, FILTER_WIDTH);
+    cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
 
     // computing the sobel x and y gradients
     cv::Mat sobel_x, sobel_y;
     sobel_x = applyConvolutionCPU(img_blurred, sobel_x_kernel, 3);
+    cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
     sobel_y = applyConvolutionCPU(img_blurred, sobel_y_kernel, 3);
+    cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
 
     // computing the magnitude and direction of the gradient
     cv::Mat magnitude = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
@@ -292,7 +322,11 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
             direction.at<float>(i, j) = atan2(sobel_y.at<float>(i, j), sobel_x.at<float>(i, j));
         }
     }
+    cv::imwrite("debug/combined_gradients_cpu.jpg", magnitude);
 
+    float highThreshold = float(otsuThreshold(img_blurred));
+    float lowThreshold = highThreshold / 2;
+    cout << "Threshold: " << highThreshold << endl;
     // NMS(lowerboud+double thresholding)
     cv::Mat nonMaxSuppressed = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
     for (int i = 1; i < img_blurred.rows - 1; i++)
@@ -328,39 +362,72 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
                     nonMaxSuppressed.at<float>(i, j) = magnitude.at<float>(i, j);
                 }
             }
+            // if greater than high_threshold, set to 255
+            // if greater than low_threshold, set to 128
+            // else set to 0
+            if (nonMaxSuppressed.at<float>(i, j) > highThreshold)
+            {
+                nonMaxSuppressed.at<float>(i, j) = 255;
+            }
+            else if (nonMaxSuppressed.at<float>(i, j) > lowThreshold)
+            {
+                nonMaxSuppressed.at<float>(i, j) = 128;
+            }
+            else
+            {
+                nonMaxSuppressed.at<float>(i, j) = 0;
+            }
         }
     }
 
+    cv::imwrite("debug/non_max_suppressed_cpu.jpg", nonMaxSuppressed);
+
     cv::Mat img_canny = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
     // float highThreshold = 40;
-    float highThreshold = float(otsuThreshold(img_blurred));
+
     // cout << "Threshold: " << highThreshold << endl;
 
     // hysteresis
-    float lowThreshold = highThreshold / 2;
     for (int i = 1; i < img_blurred.rows - 1; i++)
     {
         for (int j = 1; j < img_blurred.cols - 1; j++)
         {
-            if (nonMaxSuppressed.at<float>(i, j) > highThreshold)
+            if (nonMaxSuppressed.at<float>(i, j) >= 255)
             {
-                img_canny.at<float>(i, j) = 1;
+                img_canny.at<float>(i, j) = 255;
             }
-            else if (nonMaxSuppressed.at<float>(i, j) > lowThreshold)
+            else if (nonMaxSuppressed.at<float>(i, j) >= 128)
             {
-                for (int k = -1; k <= 1; k++)
+                bool is_connected_to_strong = false;
+                for (int k = -1; k <= 1 && !is_connected_to_strong; k++)
                 {
                     for (int l = -1; l <= 1; l++)
                     {
-                        if (nonMaxSuppressed.at<float>(i + k, j + l) > highThreshold)
+                        if (nonMaxSuppressed.at<float>(i + k, j + l) >= 255)
                         {
-                            img_canny.at<float>(i, j) = 1;
+                            // img_canny.at<float>(i, j) = 255;
+                            is_connected_to_strong = true;
+                            break;
                         }
                     }
                 }
+                if (is_connected_to_strong)
+                {
+                    img_canny.at<float>(i, j) = 1;
+                }
+                else
+                {
+                    img_canny.at<float>(i, j) = 0;
+                }
+            }
+            else
+            {
+                img_canny.at<float>(i, j) = 0;
             }
         }
     }
+    // save it
+    cv::imwrite("debug/2_cpu.jpg", img_canny);
 
     return img_canny;
 }

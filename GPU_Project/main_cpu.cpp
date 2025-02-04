@@ -10,7 +10,7 @@
 
 using namespace cv;
 using namespace std;
-const int FILTER_WIDTH = 5;
+const int FILTER_WIDTH = 3;
 const float FILTER_SIGMA = 1.75f;
 const float ALPHA = 0.05;
 const float K = 0.05;
@@ -55,6 +55,8 @@ void handle_image(enum Mode mode, std::string filename, float *gaussian_kernel, 
     case CANNY:
         cout << "Canny Edge Detection with Otsu Thresholding" << endl;
         img = cannyEdgeDetectionCPU(&img, gaussian_kernel, sobel_x_kernel, sobel_y_kernel, FILTER_WIDTH);
+        // save it to debug/2_cpu.jpg
+        cv::imwrite("debug/2_cpu.jpg", img);
         break;
     case OTSU_BIN:
         cout << "Otsu Binarization" << endl;

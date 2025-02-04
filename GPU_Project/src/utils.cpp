@@ -40,6 +40,13 @@ float *computeGaussianKernel(int filterWidth, float filterSigma)
     }
     return host_filter;
 }
+void saveImage(int height, int width, float *img, string name)
+{
+    cv::Mat printImage(height, width, CV_32F, img);
+    cv::Mat displayImage1;
+    printImage.convertTo(displayImage1, CV_8UC1, 1.0);
+    cv::imwrite(name, displayImage1);
+}
 void showImage(int height, int width, float *img, string name)
 {
     cv::Mat printImage(height, width, CV_32F, img);
