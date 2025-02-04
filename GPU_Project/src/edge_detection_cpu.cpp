@@ -10,6 +10,14 @@
 using namespace std;
 using namespace cv;
 
+void showImageCPU(cv::Mat img)
+{
+    cv::Mat displayImage1;
+    img.convertTo(displayImage1, CV_8UC1, 1.0);
+    cv::imshow("Image", displayImage1);
+    cv::waitKey(0);
+}
+
 cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int kernelSize);
 cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int kernelSize)
 {
@@ -91,18 +99,12 @@ int otsuThreshold(cv::Mat &image)
     return threshold;
 }
 
-void showImage(cv::Mat img)
-{
-    cv::Mat displayImage1;
-    img.convertTo(displayImage1, CV_8UC1, 1.0);
-    cv::imshow("Image", displayImage1);
-    cv::waitKey(0);
-}
 /**
  * Computes Harris corner detector on the cpu given an image
  *
  */
-cv::Mat harrisCornerDetectorCPU(cv::Mat *img, float *gaussian_kernel, float *sobel_x_kernel, float *sobel_y_kernel, int FILTER_WIDTH)
+cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
+
 {
     cv::Mat img_gray(img->rows, img->cols, CV_32F);
     // rgb to grayscale
@@ -203,15 +205,15 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, float *gaussian_kernel, float *sob
             if (img_harris.at<float>(i, j) > 0.035 * max)
             {
                 // color 2x2 pixels
-                for (int k = -2; k < 2; k++)
+                for (int k = -1; k <= 1; k++)
                 {
-                    for (int l = -2; l < 2; l++)
+                    for (int l = -1; l <= 1; l++)
                     {
                         int x = j + k;
                         int y = i + l;
                         if (x >= 0 && x < img_harris.cols && y >= 0 && y < img_harris.rows)
                         {
-                            img->at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 240);
+                            img->at<cv::Vec3b>(y, x) = cv::Vec3b(240, 0, 0);
                         }
                     }
                 }
@@ -221,7 +223,43 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, float *gaussian_kernel, float *sob
 
     return *img;
 }
-cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, float *sobel_x_kernel, float *sobel_y_kernel, int FILTER_WIDTH)
+
+cv::Mat otsuBinarization(cv::Mat *img)
+{
+    cv::Mat img_gray(img->rows, img->cols, CV_32F);
+    // rgb to grayscale
+    for (int i = 0; i < img->rows; i++)
+    {
+        for (int j = 0; j < img->cols; j++)
+        {
+            cv::Vec3b pixel = img->at<cv::Vec3b>(i, j);
+            img_gray.at<float>(i, j) = 0.299 * float(pixel[0]) + 0.587 * float(pixel[1]) + 0.114 * float(pixel[2]);
+        }
+    }
+
+    // otsu thresholding
+    int threshold = otsuThreshold(img_gray);
+
+    // binarize the image
+    for (int i = 0; i < img_gray.rows; i++)
+    {
+        for (int j = 0; j < img_gray.cols; j++)
+        {
+            if (img_gray.at<float>(i, j) > threshold)
+            {
+                img_gray.at<float>(i, j) = 255;
+            }
+            else
+            {
+                img_gray.at<float>(i, j) = 0;
+            }
+        }
+    }
+
+    return img_gray;
+}
+
+cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
 {
     // rgb to grayscale
     cv::Mat img_gray(img->rows, img->cols, CV_32F);
@@ -236,7 +274,7 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, float *sobel_x_kernel, float *sobel_
 
     // apply Gaussian Blur
     cv::Mat img_blurred(img_gray.rows, img_gray.cols, CV_32F);
-    img_blurred = applyConvolutionCPU(img_gray, computeGaussianKernel(FILTER_WIDTH, FILTER_SIGMA), FILTER_WIDTH);
+    img_blurred = applyConvolutionCPU(img_gray, gaussian_kernel, FILTER_WIDTH);
 
     // computing the sobel x and y gradients
     cv::Mat sobel_x, sobel_y;
@@ -299,7 +337,7 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, float *sobel_x_kernel, float *sobel_
     // cout << "Threshold: " << highThreshold << endl;
 
     // hysteresis
-    float lowThreshold = highThreshold / 3;
+    float lowThreshold = highThreshold / 2;
     for (int i = 1; i < img_blurred.rows - 1; i++)
     {
         for (int j = 1; j < img_blurred.cols - 1; j++)

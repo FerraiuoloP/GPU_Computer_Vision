@@ -6,9 +6,15 @@ NVCC = nvcc
 
 # Source files and output
 SRC_DIR = src
+ifdef CPU 
+MAIN = main_cpu.cpp
+SOURCE_FILES = $(MAIN) $(SRC_DIR)/utils.cpp $(SRC_DIR)/edge_detection_cpu.cpp 
+OUTPUT_FILE = build/main_cpu
+else
 MAIN = main.cpp
 SOURCE_FILES = $(MAIN) $(SRC_DIR)/cuda_kernel.cu $(SRC_DIR)/utils.cpp $(SRC_DIR)/edge_detection.cpp $(SRC_DIR)/cuda_otsu.cu
 OUTPUT_FILE = build/main
+endif
 
 # Default target
 all: $(OUTPUT_FILE)
@@ -22,11 +28,6 @@ $(OUTPUT_FILE): $(SOURCE_FILES)
 run: $(OUTPUT_FILE)
 	./$(OUTPUT_FILE) $$ARGS
 
-# Set the MAIN to main_cpu.cpp for all_run_cpu
-run_cpu: 
-	mkdir -p build
-	$(NVCC) $(CUDA_STD) -ccbin $(CCBIN) main_cpu.cpp $(SRC_DIR)/utils.cpp $(SRC_DIR)/edge_detection_cpu.cpp -o $(OUTPUT_FILE) $(PKG_CONFIG)
-	./build/main
 
 # Clean the build directory
 clean:
