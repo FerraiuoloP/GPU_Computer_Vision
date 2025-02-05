@@ -4,7 +4,6 @@
 #include <iostream>
 #include <string>
 #include <assert.h>
-#include "cuda_utils.cu"
 
 /**
  * @brief Compute the histogram of the image. For each pixel value, increment the count of the histogram.
@@ -115,7 +114,7 @@ __global__ void otsu_threshold_kernel(float *image, int *histogram, float *proba
     }
 }
 /**
- * @brief Find the maximum value in the array of sigma2_b.
+ * @brief Find the maximum value in the array of sigma2_b. Shared-memory based.
  *
  * @param sigma2_b The array of sigma2_b.
  * @param max_threshold The maximum threshold for which the sigma2_b is maximum.
@@ -149,7 +148,55 @@ __global__ void find_max_reduction(int *sigma2_b, int *max_threshold, int width,
     }
 }
 
-__global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold, int width, int height)
+/**
+ * @brief Warp-level max reduction exploiting shfl intrinsic. At the end, the thread in the lane 0 will have the maximum value of the warp.
+ * @param val value to be reduced that is passed between threads withing same warp
+ */
+__device__ int warpReduceMax(int val)
+{
+    for (int offset = warpSize / 2; offset > 0; offset /= 2)
+    {
+        val = max(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
+    }
+    return val;
+}
+/**
+ * @brief Block-level max reduction. At the end, the thread in the lane 0 will have the maximum value of the whole block.
+ *
+ * @param val  value to be reduced that is passed between threads withing same warp in a given block.
+ */
+__device__ int block_reduce_max(int val)
+{
+    __shared__ int shared[256 / 32];
+    int tid = threadIdx.x;
+
+    int lane = tid % warpSize;
+    int warpId = tid / warpSize;
+
+    val = warpReduceMax(val);
+
+    if (lane == 0)
+    {
+        shared[warpId] = val;
+    }
+
+    __syncthreads();
+
+    if (warpId == 0)
+    {
+        val = (tid < blockDim.x / warpSize) ? shared[lane] : 0;
+        val = warpReduceMax(val);
+    }
+    return val;
+}
+
+/**
+ * @brief Finds the maximum value inside a given integer array of fixed size 256. Shuffle-based.
+ *
+ * @param sigma2_b It will contain the sigma2_b values for each threshold.
+ * @param max_threshold It will contain the maximum threshold for which the sigma2_b is maximum.
+ */
+__global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -182,6 +229,15 @@ __global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold, int w
     }
 }
 
+/**
+ * @brief Binarize an image using a given threshold.
+ *
+ * @param output_d Output image.
+ * @param img_d Input image.
+ * @param width Width of the image.
+ * @param height Height of the image.
+ * @param threshold Threshold to binarize the image.
+ */
 __global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int width, int height, int threshold)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -193,6 +249,15 @@ __global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int w
     }
 }
 
+/**
+ * @brief Binarizes an image using a given threshold.
+ *
+ * @param img_gray_h Host image.
+ * @param img_d Device image.
+ * @param width Width of the image.
+ * @param height Height of the image.
+ * @param threshold Threshold to binarize the image.
+ */
 void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, int height, int threshold)
 {
     unsigned char *output_d;
@@ -207,6 +272,7 @@ void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, in
     cudaMemcpy(img_gray_h, output_d, img_size * sizeof(unsigned char), cudaMemcpyDeviceToHost);
     cudaFree(output_d);
 }
+
 /**
  * @brief Compute the Otsu threshold of the image.
  *
@@ -258,7 +324,7 @@ int otsu_threshold(float *image, int width, int height)
 
     cudaEventRecord(start);
     // find_max_reduction<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
-    find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
+    find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
