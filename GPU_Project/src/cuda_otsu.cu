@@ -4,7 +4,6 @@
 #include <iostream>
 #include <string>
 #include <assert.h>
-#include "cuda_utils.cu"
 
 /**
  * @brief Compute the histogram of the image. For each pixel value, increment the count of the histogram.
@@ -149,6 +148,39 @@ __global__ void find_max_reduction(int *sigma2_b, int *max_threshold, int width,
     }
 }
 
+__device__ int warpReduceMax(int val)
+{
+    for (int offset = warpSize / 2; offset > 0; offset /= 2)
+    {
+        val = max(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
+    }
+    return val;
+}
+__device__ int block_reduce_max(int val)
+{
+    __shared__ int shared[256 / 32];
+    int tid = threadIdx.x;
+
+    int lane = tid % warpSize;
+    int warpId = tid / warpSize;
+
+    val = warpReduceMax(val);
+
+    if (lane == 0)
+    {
+        shared[warpId] = val;
+    }
+
+    __syncthreads();
+
+    if (warpId == 0)
+    {
+        val = (tid < blockDim.x / warpSize) ? shared[lane] : 0;
+        val = warpReduceMax(val);
+    }
+    return val;
+}
+
 __global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -254,8 +286,9 @@ int otsu_threshold(float *image, int width, int height)
 
     // Second part of otsu where we find the effective max threshold
 
-    cudaMalloc(&max_threshold_d, 1 * sizeof(int));
+    // Find Max Parallel
 
+    cudaMalloc(&max_threshold_d, 1 * sizeof(int));
     cudaEventRecord(start);
     // find_max_reduction<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
     find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
@@ -276,4 +309,13 @@ int otsu_threshold(float *image, int width, int height)
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
     return max_threshold_h[0];
+}
+
+void binarize_img(float *img_d, float *img_h, int width, int height)
+{
+    int threshold = otsu_threshold(img_d, width, height);
+    for (int i = 0; i < width * height; i++)
+    {
+        img_h[i] = img_h[i] > threshold ? 255 : 0;
+    }
 }
