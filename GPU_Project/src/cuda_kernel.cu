@@ -206,7 +206,7 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
  * @return __global__
  */
 
-__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, const float *d_Kernel, int filter_size, int shared_size)
+__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, constfloat *d_Kernel, int filter_size, int shared_size)
 {
     extern __shared__ float data_flat[];
     // shared_size = (TILE_WIDTH + 2 * (kernel_size / 2));
