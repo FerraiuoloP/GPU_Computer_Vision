@@ -194,7 +194,7 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
  *
  **********************/
 
-__constant__ float d_Kernel[9];
+// __constant__ float d_Kernel[9];
 /**
  * @brief Fast Convolution kernel with shared memory. It computes the convolution of an image with a given kernel
  *
@@ -206,62 +206,49 @@ __constant__ float d_Kernel[9];
  * @return __global__
  */
 
-__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height)
+__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, const float *d_Kernel, int filter_size, int shared_size)
 {
-    // Define shared memory dimensions
-    const int SHARED_WIDTH = TILE_WIDTH + 2 * (FILTER_WIDTH / 2); // assuming FILTER_WIDTH is odd
-    __shared__ float data_flat[SHARED_WIDTH * SHARED_WIDTH];
+    extern __shared__ float data_flat[];
+    // shared_size = (TILE_WIDTH + 2 * (kernel_size / 2));
+    const int filter_radius = filter_size / 2;
 
-    // Calculate global memory location of this thread
-    const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
-    const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
-    const int gLoc = x0 + y0 * width;
+    // Calculate base coordinates for shared memory block
+    int xBase = blockIdx.x * TILE_WIDTH - filter_radius;
+    int yBase = blockIdx.y * TILE_WIDTH - filter_radius;
 
-    // Load corners into shared memory (example for one corner)
-    if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
+    // Collaborative loading of shared memory
+    for (int i = threadIdx.y; i < shared_size; i += blockDim.y)
     {
-        // Top-left corner
-        int x = x0 - 1;
-        int y = y0 - 1;
-        int flatIndex = threadIdx.y * SHARED_WIDTH + threadIdx.x;
-        data_flat[flatIndex] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
-
-        // Top-right corner
-        x = x0 + 1;
-        y = y0 - 1;
-        flatIndex = threadIdx.y * SHARED_WIDTH + (threadIdx.x + 2);
-        data_flat[flatIndex] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
-
-        // Bottom-left corner
-        x = x0 - 1;
-        y = y0 + 1;
-        flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + threadIdx.x;
-        data_flat[flatIndex] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
-
-        // Bottom-right corner
-        x = x0 + 1;
-        y = y0 + 1;
-        flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + (threadIdx.x + 2);
-        data_flat[flatIndex] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
+        for (int j = threadIdx.x; j < shared_size; j += blockDim.x)
+        {
+            int x = xBase + j;
+            int y = yBase + i;
+            data_flat[i * shared_size + j] =
+                (x >= 0 && y >= 0 && x < width && y < height) ? data_d[y * width + x] : 0.0f;
+        }
     }
-
     __syncthreads();
 
-    // Perform convolution
+    // Calculate global coordinates
+    const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
+    const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
+
     if (x0 < width && y0 < height)
     {
         float sum = 0.0f;
 #pragma unroll
-        for (int i = -FILTER_RADIUS; i <= FILTER_RADIUS; ++i)
+        for (int i = -filter_radius; i <= filter_radius; ++i)
         {
 #pragma unroll
-            for (int j = -FILTER_RADIUS; j <= FILTER_RADIUS; ++j)
+            for (int j = -filter_radius; j <= filter_radius; ++j)
             {
-                int flatIndex = (threadIdx.y + 1 + i) * SHARED_WIDTH + (threadIdx.x + 1 + j);
-                sum += data_flat[flatIndex] * d_Kernel[(i + FILTER_RADIUS) * FILTER_WIDTH + (j + FILTER_RADIUS)];
+                int shX = threadIdx.x + filter_radius + j;
+                int shY = threadIdx.y + filter_radius + i;
+                sum += data_flat[shY * shared_size + shX] *
+                       d_Kernel[(i + filter_radius) * filter_size + (j + filter_radius)];
             }
         }
-        result_d[gLoc] = sum;
+        result_d[y0 * width + x0] = sum;
     }
 }
 // How many results a thread computes per convolution
@@ -1260,7 +1247,7 @@ void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float 
  * @param data_h Height of the image
  * @param d_kernel Kernel
  */
-void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel)
+void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel, int kernel_size)
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 dimGrid(ceil((float)data_w / TILE_WIDTH), ceil((float)data_h / TILE_WIDTH));
@@ -1270,11 +1257,12 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    cudaMemcpyToSymbol(d_Kernel, d_kernel, 9 * sizeof(float), 0, cudaMemcpyDeviceToDevice);
+    // cudaMemcpyToSymbol(d_Kernel, d_kernel, 9 * sizeof(float), 0, cudaMemcpyDeviceToDevice);
 
     cudaEventRecord(start);
-
-    convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h);
+    int sharedWidth = TILE_WIDTH + 2 * (kernel_size / 2);
+    // sharedMemSize *= sharedMemSize * sharedMemSize;
+    convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(d_Result, d_Data, data_w, data_h, d_kernel, kernel_size, sharedWidth);
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
@@ -1463,11 +1451,11 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
     cudaEventRecord(start);
     // applyConvolution<<<gridSize, blockSize>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel);
+    convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel, 3);
     // applyConvolution<<<gridSize, blockSize>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(Iy2_d, Iy2_d, width, height, gaussian_kernel);
+    convolutionGPUWrap(Iy2_d, Iy2_d, width, height, gaussian_kernel, 3);
     // applyConvolution<<<gridSize, blockSize>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel);
+    convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel, 3);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);

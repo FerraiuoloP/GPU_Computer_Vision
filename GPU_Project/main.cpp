@@ -156,20 +156,20 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// showImage(height,width,img_gray_h, "Gray Image");
 
 	// Apply Gaussian Blur to grayscale image
-	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d);
+	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d, FILTER_WIDTH);
 	// save image
 	cudaMemcpy(img_gray_h, img_blurred_d, img_gray_size_h, cudaMemcpyDeviceToHost);
 	saveImage(height, width, img_gray_h, "debug/blurred_cuda.jpg");
 
 	// Sobel X
-	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d);
+	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d, 3);
 	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_x_d, width, height, sobel_x_separable_2_d, sobel_x_separable_d, 3);
 	float *img_sobel_x_h = (float *)malloc(img_gray_size_h);
 	cudaMemcpy(img_sobel_x_h, img_sobel_x_d, img_gray_size_h, cudaMemcpyDeviceToHost);
 	saveImage(height, width, img_sobel_x_h, "debug/sobel_x_cuda.jpg");
 
 	// Sobel Y
-	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d);
+	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d, 3);
 	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_y_d, width, height, sobel_x_separable_d, sobel_x_separable_2_d, 3);
 	float *img_sobel_y_h = (float *)malloc(img_gray_size_h);
 	cudaMemcpy(img_sobel_y_h, img_sobel_y_d, img_gray_size_h, cudaMemcpyDeviceToHost);
@@ -190,7 +190,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, 5);
 		break;
 	case CANNY_MANUAL:
 		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
