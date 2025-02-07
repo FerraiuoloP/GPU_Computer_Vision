@@ -193,7 +193,7 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
 __constant__ float d_Kernel[9];
 
 
-__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height)
+__global__ void convolutionGPU(float *  result_d,  cudaTextureObject_t   data_d,  int width,  int height)
 {
     // Define shared memory dimensions
     const int SHARED_WIDTH = TILE_WIDTH + 2 * (FILTER_WIDTH / 2); // assuming FILTER_WIDTH is odd
@@ -211,26 +211,27 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
         int x = x0 - 1;
         int y = y0 - 1;
         int flatIndex = threadIdx.y * SHARED_WIDTH + threadIdx.x;
-        data_flat[flatIndex] = (x >= 0 && y >= 0) ? data_d[x + y * width] : 0.0f;
+        data_flat[flatIndex] = (x >= 0 && y >= 0) ? tex2D<float>(data_d, x, y)  : 0.0f;
 
         // Top-right corner
         x = x0 + 1;
         y = y0 - 1;
         flatIndex = threadIdx.y * SHARED_WIDTH + (threadIdx.x + 2);
-        data_flat[flatIndex] = (x < width && y >= 0) ? data_d[x + y * width] : 0.0f;
+        data_flat[flatIndex] = (x < width && y >= 0) ? tex2D<float>(data_d, x, y)  : 0.0f;
 
         // Bottom-left corner
         x = x0 - 1;
         y = y0 + 1;
         flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + threadIdx.x;
-        data_flat[flatIndex] = (x >= 0 && y < height) ? data_d[x + y * width] : 0.0f;
+        data_flat[flatIndex] = (x >= 0 && y < height) ? tex2D<float>(data_d, x, y)  : 0.0f;
 
         // Bottom-right corner
         x = x0 + 1;
         y = y0 + 1;
         flatIndex = (threadIdx.y + 2) * SHARED_WIDTH + (threadIdx.x + 2);
-        data_flat[flatIndex] = (x < width && y < height) ? data_d[x + y * width] : 0.0f;
+        data_flat[flatIndex] = (x < width && y < height) ? tex2D<float>(data_d, x, y)  : 0.0f;
     }
+
 
     __syncthreads();
 
@@ -1267,7 +1268,31 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
 
     cudaEventRecord(start);
 
-    convolutionGPU<<<dimGrid, blockSize>>>(d_Result, d_Data, data_w, data_h);
+    cudaTextureObject_t texData = 0;
+    cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypePitch2D;
+    resDesc.res.pitch2D.devPtr = d_Data;
+    resDesc.res.pitch2D.desc = cudaCreateChannelDesc<float>();
+    resDesc.res.pitch2D.width = data_w;
+    resDesc.res.pitch2D.height = data_h;
+    resDesc.res.pitch2D.pitchInBytes = data_w * sizeof(float);
+
+    cudaTextureDesc texDesc;
+    memset(&texDesc, 0, sizeof(texDesc));
+    texDesc.addressMode[0] = cudaAddressModeClamp;
+    texDesc.addressMode[1] = cudaAddressModeClamp;
+    texDesc.filterMode = cudaFilterModePoint;
+    texDesc.readMode = cudaReadModeElementType;
+    texDesc.normalizedCoords = 0;
+
+   
+    cudaCreateTextureObject(&texData, &resDesc, &texDesc, nullptr);
+        
+
+    convolutionGPU<<<dimGrid, blockSize>>>(d_Result, texData, data_w, data_h);
+    cudaDestroyTextureObject(texData);
+
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
