@@ -2,7 +2,7 @@
 CCBIN = g++
 CUDA_STD = -std=c++14
 PKG_CONFIG = $(shell pkg-config --cflags --libs opencv4)
-NVCC = nvcc
+NVCC = nvcc -arch=sm_75
 
 # Source files and output
 SRC_DIR = src
