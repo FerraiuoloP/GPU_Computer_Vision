@@ -9,7 +9,7 @@
 #include <assert.h>
 #include "../include/cuda_kernel.cuh"
 using namespace std;
-#define TILE_WIDTH 16 // 16 X 16 TILE
+#define TILE_WIDTH 2 // 16 X 16 TILE
 
 inline cudaError_t checkCuda(cudaError_t result)
 {
@@ -1248,7 +1248,7 @@ void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float 
  * @param data_h Height of the image
  * @param d_kernel Kernel
  */
-void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *d_kernel, int kernel_size)
+void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *__restrict__ d_kernel, int kernel_size)
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 dimGrid(ceil((float)data_w / TILE_WIDTH), ceil((float)data_h / TILE_WIDTH));
@@ -1263,13 +1263,15 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     cudaEventRecord(start);
     int sharedWidth = TILE_WIDTH + 2 * (kernel_size / 2);
     // sharedMemSize *= sharedMemSize * sharedMemSize;
+
+    // applyConvolution<<<dimGrid, blockSize>>>(d_Data, d_Result, data_w, data_h, d_kernel, kernel_size);
     convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(d_Result, d_Data, data_w, data_h, d_kernel, kernel_size, sharedWidth);
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
-    // printf("Elapsed time for convolution: %f ms\n", milliseconds);
+    printf("Elapsed time for convolution: %f ms\n", milliseconds);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
@@ -1409,11 +1411,11 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
     cudaEventRecord(start);
     // applyConvolution<<<gridSize, blockSize>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel, 3);
+    convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
     // applyConvolution<<<gridSize, blockSize>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(Iy2_d, Iy2_d, width, height, gaussian_kernel, 3);
+    convolutionGPUWrap(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
     // applyConvolution<<<gridSize, blockSize>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
-    convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel, 3);
+    convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);

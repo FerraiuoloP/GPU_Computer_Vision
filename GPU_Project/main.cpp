@@ -190,7 +190,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	case CANNY:
 		high_threshold = otsu_threshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, 5);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
 	case CANNY_MANUAL:
 		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
