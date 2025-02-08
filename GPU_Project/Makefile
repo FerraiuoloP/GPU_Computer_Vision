@@ -12,7 +12,7 @@ SOURCE_FILES = $(MAIN) $(SRC_DIR)/utils.cpp $(SRC_DIR)/edge_detection_cpu.cpp
 OUTPUT_FILE = build/main_cpu
 else
 MAIN = main.cpp
-SOURCE_FILES = $(MAIN) $(SRC_DIR)/cuda_kernel.cu $(SRC_DIR)/utils.cpp $(SRC_DIR)/edge_detection.cpp $(SRC_DIR)/cuda_otsu.cu
+SOURCE_FILES = $(MAIN) $(SRC_DIR)/cuda_kernel.cu $(SRC_DIR)/utils.cpp  $(SRC_DIR)/cuda_otsu.cu
 OUTPUT_FILE = build/main
 endif
 

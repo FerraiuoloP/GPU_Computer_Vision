@@ -56,7 +56,7 @@ void handle_image(enum Mode mode, std::string filename, float *gaussian_kernel, 
         cout << "Canny Edge Detection with Otsu Thresholding" << endl;
         img = cannyEdgeDetectionCPU(&img, gaussian_kernel, sobel_x_kernel, sobel_y_kernel, FILTER_WIDTH);
         // save it to debug/2_cpu.jpg
-        cv::imwrite("debug/2_cpu.jpg", img);
+        // cv::imwrite("debug/2_cpu.jpg", img);
         break;
     case OTSU_BIN:
         cout << "Otsu Binarization" << endl;
