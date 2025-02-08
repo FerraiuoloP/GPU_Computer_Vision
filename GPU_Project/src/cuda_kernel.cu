@@ -9,7 +9,7 @@
 #include <assert.h>
 #include "../include/cuda_kernel.cuh"
 using namespace std;
-#define TILE_WIDTH 2 // 16 X 16 TILE
+#define TILE_WIDTH 16 // 16 X 16 TILE
 
 inline cudaError_t checkCuda(cudaError_t result)
 {
@@ -1194,11 +1194,11 @@ void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
 
-    cudaEvent_t start, stop;
-    checkCuda(cudaEventCreate(&start));
-    checkCuda(cudaEventCreate(&stop));
+    // cudaEvent_t start, stop;
+    // checkCuda(cudaEventCreate(&start));
+    // checkCuda(cudaEventCreate(&stop));
 
-    checkCuda(cudaEventRecord(start));
+    // checkCuda(cudaEventRecord(start));
 
     if (img_d == nullptr || gray_d == nullptr)
     {
@@ -1206,16 +1206,16 @@ void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
     }
 
     rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, N, M);
-    checkCuda(cudaEventRecord(stop));
+    // checkCuda(cudaEventRecord(stop));
 
-    checkCuda(cudaEventSynchronize(stop));
-    float milliseconds = 0;
-    checkCuda(cudaEventElapsedTime(&milliseconds, start, stop));
-    printf("Elapsed time: %f ms\n", milliseconds);
+    // checkCuda(cudaEventSynchronize(stop));
+    // float milliseconds = 0;
+    // checkCuda(cudaEventElapsedTime(&milliseconds, start, stop));
+    // printf("Elapsed time: %f ms\n", milliseconds);
 
     // cudaFree(img_d);
-    checkCuda(cudaEventDestroy(start));
-    checkCuda(cudaEventDestroy(stop));
+    // checkCuda(cudaEventDestroy(start));
+    // checkCuda(cudaEventDestroy(stop));
 
     checkCuda(cudaDeviceSynchronize());
     // Error checking
@@ -1252,52 +1252,52 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 dimGrid(ceil((float)data_w / TILE_WIDTH), ceil((float)data_h / TILE_WIDTH));
-    cudaEvent_t start, stop;
+    // cudaEvent_t start, stop;
 
     // const dim3 gridDim((data_w + 16 - 1) / 16, (data_h + 16 - 1) / 16);
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
 
     // cudaMemcpyToSymbol(d_Kernel, d_kernel, 9 * sizeof(float), 0, cudaMemcpyDeviceToDevice);
 
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     int sharedWidth = TILE_WIDTH + 2 * (kernel_size / 2);
     // sharedMemSize *= sharedMemSize * sharedMemSize;
 
     // applyConvolution<<<dimGrid, blockSize>>>(d_Data, d_Result, data_w, data_h, d_kernel, kernel_size);
     convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(d_Result, d_Data, data_w, data_h, d_kernel, kernel_size, sharedWidth);
-    cudaEventRecord(stop);
+    // cudaEventRecord(stop);
 
-    cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for convolution: %f ms\n", milliseconds);
+    // cudaEventSynchronize(stop);
+    // float milliseconds = 0;
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for convolution: %f ms\n", milliseconds);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Error in kernel CONVGPU: %s\n", cudaGetErrorString(err));
     }
     cudaDeviceSynchronize();
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
 }
 
 void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
     size_t img_size = width * height * sizeof(float);
-    float milliseconds = 0;
-    float milliseconds2 = 0;
+    // float milliseconds = 0;
+    // float milliseconds2 = 0;
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
     float *img_sobel, *sobel_directions, *lbcs_img, *tts_img, *img_debug_h;
     float *output_d;
 
-    cudaEvent_t start, stop;
-    cudaEvent_t start2, stop2;
+    // cudaEvent_t start, stop;
+    // cudaEvent_t start2, stop2;
     img_debug_h = (float *)malloc(img_size);
 
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
 
     // cudamallocs
     cudaMalloc(&img_sobel, img_size);
@@ -1309,30 +1309,30 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
 
     // 1. Combining gradients to get magnitude and direction of each pixel
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
-
+    cudaDeviceSynchronize();
     // 2. Lower bound cutoff suppression to suppress non-maximum pixels with respect to the gradient direction
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     lowerBoundCutoffSuppression_sh<<<grid, block>>>(img_sobel, sobel_directions, lbcs_img, width, height);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for LBCS: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for LBCS: %f ms\n", milliseconds);
 
     // 3. Double thresholding suppression to mark edge pixels as strong, weak or non-edge
     doubleThresholdSuppression<<<grid, block>>>(lbcs_img, output_d, width, height, low_th, high_th);
-
-    cudaEventCreate(&start2);
-    cudaEventCreate(&stop2);
+    cudaDeviceSynchronize();
+    // cudaEventCreate(&start2);
+    // cudaEventCreate(&stop2);
 
     // 4. Hysteresis to mark weak edge pixels as strong if they are connected to strong edge pixels
-    cudaEventRecord(start2);
+    // cudaEventRecord(start2);
     hysteresis<<<grid, block>>>(output_d, width, height);
     cudaDeviceSynchronize();
-    cudaEventRecord(stop2);
-    cudaEventSynchronize(stop2);
-    cudaEventElapsedTime(&milliseconds2, start2, stop2);
-    printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
+    // cudaEventRecord(stop2);
+    // cudaEventSynchronize(stop2);
+    // cudaEventElapsedTime(&milliseconds2, start2, stop2);
+    // printf("Elapsed time for Hysteresis: %f ms\n", milliseconds2);
 
     // Copying img data from cv object to device, then overwriting it with the output of the kernel and copying it back to the host
     // cudaMemcpy(img_data_d, img_data, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
@@ -1357,21 +1357,21 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
 void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
-    float milliseconds = 0;
+    // float milliseconds = 0;
     float max_value_f = -FLT_MAX;
     float *Ix2_d, *Iy2_d, *IxIy_d, *IxIy_d2, *detM_d, *traceM_d;
     float *output_d;
     float *max_value_d;
 
     cudaStream_t streams[3];
-    cudaEvent_t start, stop;
+    // cudaEvent_t start, stop;
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     const dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                         (height + blockSize.y - 1) / blockSize.y,
                         1);
     size_t sh_mem_size = blockSize.x * blockSize.y * sizeof(float);
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
 
 #pragma region Memory Allocation
     // cuda malloc
@@ -1409,7 +1409,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // applyConvolution<<<gridSize, blockSize, 0, streams[1]>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
     // applyConvolution<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
 
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     // applyConvolution<<<gridSize, blockSize>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
     convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
     // applyConvolution<<<gridSize, blockSize>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
@@ -1417,10 +1417,10 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // applyConvolution<<<gridSize, blockSize>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
     convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Gaussian blur: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for Gaussian blur: %f ms\n", milliseconds);
 
     // Synchronize streams
     cudaDeviceSynchronize();
@@ -1450,41 +1450,41 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 #pragma endregion
 
 #pragma region 6. Non-maximum suppression on the Harris response
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for NMS: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for NMS: %f ms\n", milliseconds);
 #pragma endregion
 
 #pragma region 7. Finding Max value in Harris response
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
 
     find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Max value Shfl: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for Max value Shfl: %f ms\n", milliseconds);
 
     // debug only
     cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
-    printf("Max value in Harris response Shfl: %f\n", max_value_f);
+    // printf("Max value in Harris response Shfl: %f\n", max_value_f);
 
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
 
-    find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    // find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
 
     // debug only
     cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
-    printf("Max value in Harris response Shrd: %f\n", max_value_f);
+    // printf("Max value in Harris response Shrd: %f\n", max_value_f);
 #pragma endregion
 
 #pragma region 8. Corner thresholding
@@ -1507,8 +1507,8 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     cudaStreamDestroy(streams[1]);
     cudaStreamDestroy(streams[2]);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
 #pragma endregion
 
     cudaError_t err = cudaGetLastError();

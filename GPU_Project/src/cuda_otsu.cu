@@ -287,16 +287,16 @@ int otsu_threshold(float *image, int width, int height)
     const dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
     const dim3 gridSize2(1, 1);
     const dim3 blockSize2(256, 1);
-    float milliseconds = 0;
+    // float milliseconds = 0;
     int *histogram;
     float *probabilities;
     int *sigma2_b;
     int *max_threshold_d;
     int *max_threshold_h = (int *)malloc(1 * sizeof(int));
-    cudaEvent_t start, stop;
+    // cudaEvent_t start, stop;
 
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
 
     cudaMalloc(&histogram, 256 * sizeof(int));
     cudaMemset(histogram, 0, 256 * sizeof(int));
@@ -310,36 +310,36 @@ int otsu_threshold(float *image, int width, int height)
     computeProbabilitiesHistogram<<<gridSize2, blockSize2>>>(image, histogram, probabilities, width * height);
 
     // sigma2b for each threshold
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     otsu_threshold_kernel<<<gridSize2, blockSize2>>>(image, histogram, probabilities, width, height, sigma2_b);
-    cudaEventRecord(stop);
+    // cudaEventRecord(stop);
 
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Otsu threshold elapsed time: %f ms\n", milliseconds);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Otsu threshold elapsed time: %f ms\n", milliseconds);
 
     // Second part of otsu where we find the effective max threshold
 
     cudaMalloc(&max_threshold_d, 1 * sizeof(int));
 
-    cudaEventRecord(start);
+    // cudaEventRecord(start);
     // find_max_reduction<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
     find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d);
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Find max threshold CUDA elapsed time: %f ms\n", milliseconds);
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&milliseconds, start, stop);
+    // printf("Find max threshold CUDA elapsed time: %f ms\n", milliseconds);
 
     cudaMemcpy(max_threshold_h, max_threshold_d, 1 * sizeof(int), cudaMemcpyDeviceToHost);
-    printf("Max threshold Cuda: %d\n", max_threshold_h[0]);
+    // printf("Max threshold Cuda: %d\n", max_threshold_h[0]);
     cudaDeviceSynchronize();
 
     cudaFree(histogram);
     cudaFree(probabilities);
     cudaFree(sigma2_b);
     cudaFree(max_threshold_d);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
     return max_threshold_h[0];
 }

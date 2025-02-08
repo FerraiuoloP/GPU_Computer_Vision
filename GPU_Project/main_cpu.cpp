@@ -170,6 +170,7 @@ int main(const int argc, const char **argv)
     }
     else
     {
+        // measure time
         handle_image(mode, filename, gaussian_kernel);
     }
     free(gaussian_kernel);

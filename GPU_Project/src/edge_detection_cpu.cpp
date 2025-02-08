@@ -10,7 +10,7 @@
 using namespace std;
 using namespace cv;
 
-#define MEASURE_TIME 1
+// #define MEASURE_TIME
 
 void showImageCPU(cv::Mat img)
 {
@@ -116,6 +116,7 @@ int otsuThreshold(cv::Mat &image)
 cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
 
 {
+    auto start = std::chrono::high_resolution_clock::now();
     cv::Mat img_gray(img->rows, img->cols, CV_32F);
     // rgb to grayscale
     for (int i = 0; i < img->rows; i++)
@@ -126,22 +127,22 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
             img_gray.at<float>(i, j) = 0.299 * float(pixel[0]) + 0.587 * float(pixel[1]) + 0.114 * float(pixel[2]);
         }
     }
-    cv::imwrite("debug/gray_cpu.jpg", img_gray);
+    // cv::imwrite("debug/gray_cpu.jpg", img_gray);
     // showImage(img_gray);
 
     // apply Gaussian Blur
     cv::Mat img_blurred(img_gray.rows, img_gray.cols, CV_32F);
     img_blurred = applyConvolutionCPU(img_gray, gaussian_kernel, FILTER_WIDTH);
-    cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
+    // cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
 
     // showImage(img_blurred);
 
     // computing the sobel x and y gradients
     cv::Mat sobel_x, sobel_y;
     sobel_x = applyConvolutionCPU(img_blurred, sobel_x_kernel, 3);
-    cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
+    // cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
     sobel_y = applyConvolutionCPU(img_blurred, sobel_y_kernel, 3);
-    cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
+    // cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
 
     // Computing harris response map
     cv::Mat img_harris = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
@@ -169,7 +170,7 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
     }
 
     // save harris response map
-    cv::imwrite("debug/harris_cpu.jpg", img_harris);
+    // cv::imwrite("debug/harris_cpu.jpg", img_harris);
 
     // normalize the image
     // cv::normalize(img_harris, img_harris, 0, 1, cv::NORM_MINMAX);
@@ -195,8 +196,6 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
 
     // showImage(img_harris);
     // print max value
-    cout << "Max value: " << max << endl;
-    cout << "Min value: " << min << endl;
 
     // NMS
     for (int i = 1; i < img_harris.rows - 1; i++)
@@ -245,12 +244,16 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
             }
         }
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    cout << "Harris CPU time: " << duration.count() << "ms" << endl;
 
     return *img;
 }
 
 cv::Mat otsuBinarization(cv::Mat *img)
 {
+    auto start = std::chrono::high_resolution_clock::now();
     cv::Mat img_gray(img->rows, img->cols, CV_32F);
     // rgb to grayscale
     for (int i = 0; i < img->rows; i++)
@@ -282,12 +285,16 @@ cv::Mat otsuBinarization(cv::Mat *img)
         }
     }
 
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    cout << "Otsu CPU time: " << duration.count() << "ms" << endl;
     return img_gray;
 }
 
 cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
 {
     // rgb to grayscale
+    auto start = std::chrono::high_resolution_clock::now();
     cv::Mat img_gray(img->rows, img->cols, CV_32F);
     for (int i = 0; i < img->rows; i++)
     {
@@ -297,19 +304,19 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
             img_gray.at<float>(i, j) = 0.299 * float(pixel[0]) + 0.587 * float(pixel[1]) + 0.114 * float(pixel[2]);
         }
     }
-    cv::imwrite("debug/gray_cpu.jpg", img_gray);
+    // cv::imwrite("debug/gray_cpu.jpg", img_gray);
 
     // apply Gaussian Blur
     cv::Mat img_blurred(img_gray.rows, img_gray.cols, CV_32F);
     img_blurred = applyConvolutionCPU(img_gray, gaussian_kernel, FILTER_WIDTH);
-    cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
+    // cv::imwrite("debug/blurred_cpu.jpg", img_blurred);
 
     // computing the sobel x and y gradients
     cv::Mat sobel_x, sobel_y;
     sobel_x = applyConvolutionCPU(img_blurred, sobel_x_kernel, 3);
-    cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
+    // cv::imwrite("debug/sobel_x_cpu.jpg", sobel_x);
     sobel_y = applyConvolutionCPU(img_blurred, sobel_y_kernel, 3);
-    cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
+    // cv::imwrite("debug/sobel_y_cpu.jpg", sobel_y);
 
     // computing the magnitude and direction of the gradient
     cv::Mat magnitude = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
@@ -322,11 +329,10 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
             direction.at<float>(i, j) = atan2(sobel_y.at<float>(i, j), sobel_x.at<float>(i, j));
         }
     }
-    cv::imwrite("debug/combined_gradients_cpu.jpg", magnitude);
+    // cv::imwrite("debug/combined_gradients_cpu.jpg", magnitude);
 
     float highThreshold = float(otsuThreshold(img_blurred));
     float lowThreshold = highThreshold / 2;
-    cout << "Threshold: " << highThreshold << endl;
     // NMS(lowerboud+double thresholding)
     cv::Mat nonMaxSuppressed = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
     for (int i = 1; i < img_blurred.rows - 1; i++)
@@ -380,7 +386,7 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
         }
     }
 
-    cv::imwrite("debug/non_max_suppressed_cpu.jpg", nonMaxSuppressed);
+    // cv::imwrite("debug/non_max_suppressed_cpu.jpg", nonMaxSuppressed);
 
     cv::Mat img_canny = cv::Mat::zeros(img_blurred.rows, img_blurred.cols, CV_32F);
     // float highThreshold = 40;
@@ -427,7 +433,10 @@ cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const 
         }
     }
     // save it
-    cv::imwrite("debug/2_cpu.jpg", img_canny);
+    // cv::imwrite("debug/2_cpu.jpg", img_canny);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    cout << "Canny CPU time: " << duration.count() << "ms" << endl;
 
     return img_canny;
 }

@@ -107,6 +107,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	float *sobel_y_separable_d;
 	float *sobel_y_separable_2_d;
 
+	auto start = std::chrono::high_resolution_clock::now();
 	float *gaussian_kernel = computeGaussianKernel(FILTER_WIDTH, FILTER_SIGMA);
 	float *gaussian_kernel_d;
 
@@ -148,8 +149,8 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// RGB to Gray
 	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
 	// show rgb to gray image
-	cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	saveImage(height, width, img_gray_h, "debug/gray_cuda.jpg");
+	// cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// saveImage(height, width, img_gray_h, "debug/gray_cuda.jpg");
 
 	// //convert to host
 	// cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
@@ -158,22 +159,22 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 	// Apply Gaussian Blur to grayscale image
 	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d, FILTER_WIDTH);
 	// save image
-	cudaMemcpy(img_gray_h, img_blurred_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	saveImage(height, width, img_gray_h, "debug/blurred_cuda.jpg");
+	// cudaMemcpy(img_gray_h, img_blurred_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// saveImage(height, width, img_gray_h, "debug/blurred_cuda.jpg");
 
 	// Sobel X
 	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d, 3);
 	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_x_d, width, height, sobel_x_separable_2_d, sobel_x_separable_d, 3);
-	float *img_sobel_x_h = (float *)malloc(img_gray_size_h);
-	cudaMemcpy(img_sobel_x_h, img_sobel_x_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	saveImage(height, width, img_sobel_x_h, "debug/sobel_x_cuda.jpg");
+	// float *img_sobel_x_h = (float *)malloc(img_gray_size_h);
+	// cudaMemcpy(img_sobel_x_h, img_sobel_x_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// saveImage(height, width, img_sobel_x_h, "debug/sobel_x_cuda.jpg");
 
 	// Sobel Y
 	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d, 3);
 	// separableConvolutionKernelWrap(img_blurred_d, img_sobel_y_d, width, height, sobel_x_separable_d, sobel_x_separable_2_d, 3);
-	float *img_sobel_y_h = (float *)malloc(img_gray_size_h);
-	cudaMemcpy(img_sobel_y_h, img_sobel_y_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	saveImage(height, width, img_sobel_y_h, "debug/sobel_y_cuda.jpg");
+	// float *img_sobel_y_h = (float *)malloc(img_gray_size_h);
+	// cudaMemcpy(img_sobel_y_h, img_sobel_y_d, img_gray_size_h, cudaMemcpyDeviceToHost);
+	// saveImage(height, width, img_sobel_y_h, "debug/sobel_y_cuda.jpg");
 
 	// Exeuting the CV task based on the mode
 	switch (mode)
@@ -218,6 +219,9 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		binarize_img_wrapper(img.data, img_gray_d, width, height, threshold);
 		break;
 	}
+	auto end = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+	cout << "Execution time: " << duration.count() << "ms" << endl;
 
 	// Showing the result
 	if (mode != CANNY_GUI)
@@ -233,10 +237,10 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 			img_out = cv::Mat(height, width, CV_8UC4, img.data);
 		}
 		string window_name = "Output Image " + to_string(mode);
-		string filesave = "debug/" + to_string(mode) + "_cuda.jpg";
+		// string filesave = "debug/" + to_string(mode) + "_cuda.jpg";
 		cv::cvtColor(img_out, img_out, cv::COLOR_RGBA2BGR);
 		cv::imshow(window_name, img_out);
-		cv::imwrite(filesave, img_out);
+		// cv::imwrite(filesave, img_out);
 
 		// If not from video, wait for key press
 		if (!from_video)
