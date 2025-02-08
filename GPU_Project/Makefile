@@ -27,7 +27,10 @@ $(OUTPUT_FILE): $(SOURCE_FILES)
 # Run the program
 run: $(OUTPUT_FILE)
 	./$(OUTPUT_FILE) $$ARGS
-
+run-all: $(OUTPUT_FILE)
+	./$(OUTPUT_FILE) -H $$ARGS > \dev\null &
+	./$(OUTPUT_FILE) -C $$ARGS > \dev\null &
+	./$(OUTPUT_FILE) -O $$ARGS > \dev\null &
 
 # Clean the build directory
 clean:
