@@ -85,3 +85,7 @@ test-output/
 
 # Cache del compilatore
 ccache/
+
+Profile/*
+benchmark/*
+debug/*
