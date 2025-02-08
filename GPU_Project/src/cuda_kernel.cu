@@ -1412,7 +1412,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     cudaStreamSynchronize(streams[0]);
     cudaStreamSynchronize(streams[1]);
     cudaStreamSynchronize(streams[2]);
-    cudaDeviceSynchronize();
+    // cudaDeviceSynchronize();
 
     // 2. Apply Gaussian blur to Ix2, Iy2, and IxIy
     // applyConvolution<<<gridSize, blockSize, 0, streams[0]>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
@@ -1480,8 +1480,8 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // printf("Elapsed time for Max value Shfl: %f ms\n", milliseconds);
 
     // debug only
-    cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
-    // printf("Max value in Harris response Shfl: %f\n", max_value_f);
+    cudaMemcpy(&max_value_f, max_value_d, sizeof(float), cudaMemcpyDeviceToHost);
+    printf("Max value in Harris response Shfl: %f\n", max_value_f);
 
     // cudaEventRecord(start);
 
@@ -1491,9 +1491,6 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // cudaEventSynchronize(stop);
     // cudaEventElapsedTime(&milliseconds, start, stop);
     // printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
-
-    // debug only
-    cudaMemcpy(&max_value_f, max_value_d, sizeof(int), cudaMemcpyDeviceToHost);
     // printf("Max value in Harris response Shrd: %f\n", max_value_f);
 #pragma endregion
 
