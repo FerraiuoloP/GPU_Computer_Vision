@@ -12,6 +12,11 @@ using namespace cv;
 
 // #define MEASURE_TIME
 
+/**
+ * @brief Shows an image using OpenCV
+ *
+ * @param img Input image
+ */
 void showImageCPU(cv::Mat img)
 {
     cv::Mat displayImage1;
@@ -19,7 +24,14 @@ void showImageCPU(cv::Mat img)
     cv::imshow("Image", displayImage1);
     cv::waitKey(0);
 }
-
+/**
+ * @brief Trivial CPU Convolution implementation
+ *
+ * @param inputImage Input image
+ * @param kernel Filter kernel
+ * @param kernelSize Kernel size
+ * @return cv::Mat Output image
+ */
 cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int kernelSize);
 cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int kernelSize)
 {
@@ -66,6 +78,12 @@ cv::Mat applyConvolutionCPU(const cv::Mat &inputImage, const float *kernel, int 
     return outputImage;
 }
 
+/**
+ * @brief Computes the optimal otsu threshold of a given image
+ *
+ * @param image  Input image
+ * @return int Optimal Otsu threshold
+ */
 int otsuThreshold(cv::Mat &image);
 int otsuThreshold(cv::Mat &image)
 {
@@ -110,8 +128,14 @@ int otsuThreshold(cv::Mat &image)
 }
 
 /**
- * Computes Harris corner detector on the cpu given an image
+ * @brief Applies Harris Corner Detection on an image
  *
+ * @param img Input image
+ * @param gaussian_kernel Gaussian kernel
+ * @param sobel_x_kernel  Sobel x kernel
+ * @param sobel_y_kernel  Sobel y kernel
+ * @param FILTER_WIDTH Filter width of the gaussian kernel
+ * @return cv::Mat Image with Harris corners marked in red
  */
 cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
 
@@ -251,6 +275,12 @@ cv::Mat harrisCornerDetectorCPU(cv::Mat *img, const float *gaussian_kernel, cons
     return *img;
 }
 
+/**
+ * @brief Binirizes an image using Otsu's method
+ *
+ * @param img Input image
+ * @return cv::Mat  Binarized image
+ */
 cv::Mat otsuBinarization(cv::Mat *img)
 {
     auto start = std::chrono::high_resolution_clock::now();
@@ -291,6 +321,16 @@ cv::Mat otsuBinarization(cv::Mat *img)
     return img_gray;
 }
 
+/**
+ * @brief Applies Canny Edge Detection on an image
+ *
+ * @param img Input image
+ * @param gaussian_kernel Gaussian kernel
+ * @param sobel_x_kernel  Sobel x kernel
+ * @param sobel_y_kernel Sobel y kernel
+ * @param FILTER_WIDTH Filter width of the gaussian kernel
+ * @return cv::Mat Canny edge detected image
+ */
 cv::Mat cannyEdgeDetectionCPU(cv::Mat *img, const float *gaussian_kernel, const float *sobel_x_kernel, const float *sobel_y_kernel, int FILTER_WIDTH)
 {
     // rgb to grayscale

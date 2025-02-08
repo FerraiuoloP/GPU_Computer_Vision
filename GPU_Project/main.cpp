@@ -55,6 +55,8 @@ void save_image(float *img_d, size_t img_size_h, int height, int width, std::str
  * @param filename Image filename
  * @param low_threshold Low threshold for Canny Edge Detection Manual mode
  * @param high_threshold High threshold for Canny Edge Detection Manual mode
+ * @param from_video Flag to indicate if the image is taken from a video. Default is false
+ * @param img_v If from_video is true, the image is passed as a cv::Mat. Default is empty
  */
 void handle_image(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool from_video = false, cv::Mat img_v = cv::Mat())
 {
@@ -276,6 +278,14 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		fprintf(stderr, "Error in main kernels: %s\n", cudaGetErrorString(err));
 	}
 }
+/**
+ * @brief Handles video processing: RGB to Gray, Gaussian Blur then Harris/ShiTomasi Corner Detection, Canny Edge Detection or Otsu binarization
+ *
+ * @param mode Execution mode. Can be HARRIS, SHI_TOMASI, CANNY, CANNY_MANUAL, CANNY_GUI, OTSU_BIN
+ * @param filename Video filename
+ * @param low_threshold Low threshold for Canny Edge Detection Manual mode
+ * @param high_threshold  High threshold for Canny Edge Detection Manual mode
+ */
 void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
 {
 	cv::VideoCapture cap(filename);

@@ -21,17 +21,22 @@ make all
 ```
 An example of how to run the project is the following:
 ```bash
-make run ARGS="-H -f=input/traffic.jpg"
+make run ARGS="-C -f=input/traffic.jpg -g"
+```
+or to run both **Canny**, **Harris** and **Otsu binarization** all at once:
+```bash
+make run-all ARGS="-f=input/traffic.jpg"
 ```
 ### Arguments
-- **Operating mode:**
-  - **-H:** Harris Corner Detector
-  - **-S:** Shi-Tomasi Corner Detector
-  - **-C:** Canny Edge Detector
-  - **-O:** Otsu's thresholding for image binarization
-  - **-A:** Process all the algorithms at once using multi-threading.
-- **-f:** path to the input image or video
-- **Additional arguments:**
+1. **Operating mode:** Should not be specified in case of `run-all`
+     - **-H:** Harris Corner Detector
+     - **-S:** Shi-Tomasi Corner Detector
+     - **-C:** Canny Edge Detector
+     - **-O:** Otsu's thresholding for image binarization
+     - **-A:** Process all the algorithms at once using multi-threading.
+2. **Input:** 
+     - **-f:** path to the input image or video
+3. **Additional arguments:**
     - **Canny** can be operated also in two different modes:
         - **-g:** GUI Mode. This allows to selects the thresholds interactively. Only available for images.
         - **Manual thresholds:** You can also specify the thresholds manually by adding the following arguments:

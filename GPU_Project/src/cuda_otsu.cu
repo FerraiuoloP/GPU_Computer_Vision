@@ -31,7 +31,6 @@ __global__ void computeHistogram(float *image, int *histogram, int width, int he
  * @param histogram
  * @param probabilities
  * @param length
- * @return __global__
  */
 __global__ void computeProbabilitiesHistogram(float *image, int *histogram, float *probabilities, int length)
 {
@@ -120,9 +119,8 @@ __global__ void otsu_threshold_kernel(float *image, int *histogram, float *proba
  * @param max_threshold The maximum threshold for which the sigma2_b is maximum.
  * @param width The width of the image.
  * @param height The height of the image.
- * @return __global__
  */
-__global__ void find_max_reduction(int *sigma2_b, int *max_threshold, int width, int height)
+__global__ void find_max_reduction_shrd(int *sigma2_b, int *max_threshold, int width, int height)
 {
     __shared__ int sigma2b_shared[256];
     __shared__ int sigma2b_shared_idx[256];
@@ -323,7 +321,7 @@ int otsu_threshold(float *image, int width, int height)
     cudaMalloc(&max_threshold_d, 1 * sizeof(int));
 
     // cudaEventRecord(start);
-    // find_max_reduction<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
+    // find_max_reduction_shrd<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
     find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d);
 
     // cudaEventRecord(stop);

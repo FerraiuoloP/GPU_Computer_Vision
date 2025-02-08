@@ -38,7 +38,6 @@ inline cudaError_t checkCuda(cudaError_t result)
  * @param C Output vector C
  * @param M Number of rows
  * @param N Number of columns
- * @return __global__
  */
 __global__ void vecAdd(float *A, float *B, float *C, int M, int N)
 {
@@ -59,7 +58,6 @@ __global__ void vecAdd(float *A, float *B, float *C, int M, int N)
  * @param C Output vector C
  * @param M Number of rows
  * @param N Number of columns
- * @return __global__
  */
 __global__ void vecMul(float *A, float *B, float *C, int M, int N)
 {
@@ -79,7 +77,6 @@ __global__ void vecMul(float *A, float *B, float *C, int M, int N)
  * @param C Output vector C
  * @param M Number of rows
  * @param N Number of columns
- * @return __global__
  */
 __global__ void vecSub(float *A, float *B, float *C, int M, int N)
 {
@@ -93,13 +90,12 @@ __global__ void vecSub(float *A, float *B, float *C, int M, int N)
 }
 /**
  * @brief Vector division kernel. It computes the element-wise division of two vectors.
- *
+ * If the denominator is 0, the result is set to 0.
  * @param A Input vector A
  * @param B Input vector B
  * @param C Output vector C
  * @param M Number of rows
  * @param N Number of columns
- * @return __global__
  */
 __global__ void vecDiv(float *A, float *B, float *C, int M, int N)
 {
@@ -126,7 +122,6 @@ __global__ void vecDiv(float *A, float *B, float *C, int M, int N)
  * @param dst_img_d The destination 3 channel image
  * @param width Width of the image
  * @param height Width of the image
- * @return __global__
  */
 
 __global__ void copy1ChannelTo4(float *src_img_d, uchar4 *dst_img_d, int width, int height)
@@ -143,7 +138,15 @@ __global__ void copy1ChannelTo4(float *src_img_d, uchar4 *dst_img_d, int width, 
         dst_img_d[idx] = make_uchar4(val, val, val, 255);
     }
 }
-
+/**
+ * @brief Given an Harris Map and a threshold, it colors the corners in red of the destination image.
+ *
+ * @param harris_map Harris response map
+ * @param dst_img_d Destination image
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param threshold Threshold value on which to consider a pixel as a corner
+ */
 __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, int height, float threshold)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -189,9 +192,7 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
  * @param width Width of the image
  * @param height Height of the image
  * @param kernel_d Convolution kernel
- * @return __global__
  */
-
 __global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, const float *d_Kernel, int filter_size, int shared_size)
 {
     extern __shared__ float data_flat[];
@@ -241,7 +242,6 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
 #define ROW_THREAD_STEPS 8
 // Border around the shared memory
 #define ROW_HALO_STEPS 1
-
 __global__ void rowConvolution(float *data_d, float *result_d, int width, int height, float *kernel_d)
 {
     // Added +1 to shared memory width to prevent out-of-bounds access
@@ -410,13 +410,12 @@ __global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, f
  **************/
 
 /**
- * @brief Kernel that convers a RGB image to a Grayscale image
+ * @brief Kernel that convers a RGBA image to a Grayscale image
  *
- * @param img_d Source RGB image
+ * @param img_d Source RGBA image
  * @param gray_d  Destination Grayscale image
- * @param N
- * @param M
- * @return __global__
+ * @param width Width of the image
+ * @param height Height of the image
  */
 __global__ void rgbToGrayKernel(const uchar4 *img_d, float *gray_d, int width, int height)
 {
@@ -430,6 +429,14 @@ __global__ void rgbToGrayKernel(const uchar4 *img_d, float *gray_d, int width, i
     }
 }
 
+/**
+ * @brief Converts a RGB image to RGBA, padding the alpha channel with 255
+ * This is so that we can exploit memory transactions and improve coalescing.
+ * @param rgb_data Input RGB image
+ * @param padded_data Output RGBA image
+ * @param width Width of the image
+ * @param height Height of the image
+ */
 void padRGBToUchar4(const unsigned char *rgb_data, uchar4 *padded_data, int width, int height)
 {
     for (int y = 0; y < height; y++)
@@ -449,9 +456,8 @@ void padRGBToUchar4(const unsigned char *rgb_data, uchar4 *padded_data, int widt
 }
 
 /**
- * @brief warp-level reduction exploiting shfl intrinsic
+ * @brief Warp-level max reduction exploiting shfl intrinsic. At the end, the thread in the lane 0 will have the maximum value of the warp.
  * @param val value to be reduced that is passed between threads withing same warp
- * @return __device__
  */
 __device__ float warpReduceMax(float val)
 {
@@ -467,9 +473,8 @@ __device__ float warpReduceMax(float val)
 
 /**
  * @brief Block-level reduction to find the maximum value
- *
+ * At the end, the maximum value of the block is stored in the first thread of the block
  * @param val value to be max-reduced
- * @return __device__
  */
 __device__ float blockReduceMax(float val)
 {
@@ -505,7 +510,6 @@ __device__ float blockReduceMax(float val)
  * @see https://stackoverflow.com/questions/17399119/how-do-i-use-atomicmax-on-floating-point-values-in-cuda
  * @param address Address of the value to be updated
  * @param val Value to be compared with the current value
- * @return __device__
  */
 __device__ static float atomicMax(float *address, float val)
 {
@@ -522,14 +526,15 @@ __device__ static float atomicMax(float *address, float val)
 
 /**
  * @brief Fast max reduction exploiting cuda shfl intrinsics.
+ * It computes the maximum value of an image using a block-level reduction.
+ * Then it uses an atomic operation to find the final maximum value among all blocks.
  *
  * @param img Input image
  * @param max_value Final max value
  * @param width Width of the image
  * @param height Height of the image
- * @return __global__
  */
-__global__ void find_max_reduction(float *img, float *max_value, int width, int height)
+__global__ void find_max_reduction_shfl(float *img, float *max_value, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -564,13 +569,12 @@ __global__ void find_max_reduction(float *img, float *max_value, int width, int 
 /**
  * @brief Max reduction using shared memory
  *
- * @param img
- * @param max_value
- * @param width
- * @param height
- * @return __global__
+ * @param img Input image
+ * @param max_value Final max value
+ * @param width Width of the image
+ * @param height Height of the image
  */
-__global__ void find_max_reduction_sh(float *img, float *max_value, int width, int height)
+__global__ void find_max_reduction_shrd(float *img, float *max_value, int width, int height)
 {
     extern __shared__ float shared_max[];
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -606,7 +610,6 @@ __global__ void find_max_reduction_sh(float *img, float *max_value, int width, i
  * @param N Width of the image
  * @param M Height of the image
  * @param window_size
- * @return __global__
  */
 __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, int N, int M, int window_size)
 {
@@ -661,6 +664,7 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
     }
 }
 
+// non optimized NMS(non shared memory version)
 __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int N, int M, int window_size)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -695,7 +699,6 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
  * @param corners_output Output image containing the Shi-Tommasi response for each pixel
  * @param width Width of the image
  * @param height Height of the image
- * @return __global__
  */
 __global__ void
 computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
@@ -723,12 +726,11 @@ computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, 
 /**
  * @brief Utility kernel that suppress a pixel if it's lower than a given threshold.
  *
- * @param harris_map
- * @param corners_output
- * @param N
- * @param M
- * @param threshold
- * @return __global__
+ * @param harris_map Input harris map
+ * @param corners_output Output image containing the corners
+ * @param N Width of the image
+ * @param M Height of the image
+ * @param threshold Threshold value
  */
 __global__ void applyThreshold(const float *harris_map, float *corners_output, int N, int M, float threshold)
 {
@@ -771,6 +773,7 @@ __global__ void combineGradientsKernel(float *img_sobel_x, float *img_sobel_y, f
 
 /**
  * @brief Compute a non maximum suppression on the gradient magnitude image. Each pixel is compared with its neighbors in the direction of the gradient. If the pixel is not the maximum, it is set to 0.
+ * Shared memory version
  * @cite https://en.wikipedia.org/wiki/Canny_edge_detector#Gradient_magnitude_thresholding_or_lower_bound_cut-off_suppression for further details.
  * @param img_magn_gradient Image containing the magnitude of the gradient for each pixel.
  * @param img_dir_gradient Image containing the direction of the gradient for each pixel.
@@ -779,7 +782,6 @@ __global__ void combineGradientsKernel(float *img_sobel_x, float *img_sobel_y, f
  * @param height height of the image.
  * @param low_th Lower threshold for the double thresholding.
  * @param high_th Higher threshold for the double thresholding.
- * @return __global__
  */
 __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *img_dir_gradient, float *img_output, int width, int height)
 {
@@ -869,6 +871,7 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
 }
 /**
  * @brief Compute a non maximum suppression on the gradient magnitude image. Each pixel is compared with its neighbors in the direction of the gradient. If the pixel is not the maximum, it is set to 0.
+ * Non shared memory version
  * @cite https://en.wikipedia.org/wiki/Canny_edge_detector#Gradient_magnitude_thresholding_or_lower_bound_cut-off_suppression for further details.
  * @param img_magn_gradient Image containing the magnitude of the gradient for each pixel.
  * @param img_dir_gradient Image containing the direction of the gradient for each pixel.
@@ -877,7 +880,6 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
  * @param height height of the image.
  * @param low_th Lower threshold for the double thresholding.
  * @param high_th Higher threshold for the double thresholding.
- * @return __global__
  */
 __global__ void lowerBoundCutoffSuppression(float *img_magn_gradient, float *img_dir_gradient, float *img_output, int width, int height)
 {
@@ -1109,6 +1111,14 @@ __global__ void hysteresis(float *TTS_img, int width, int height)
     }
 }
 
+/**
+ * @brief Utility function to print the content of a float (device)array.
+ * It copies the content of the device array to the host and prints it.
+ *
+ * @param arr_d device array
+ * @param n number of elements to print
+ * @param stringa string to print before the array
+ */
 void printDebugArr(float *arr_d, int n, char *stringa)
 {
     float *arr_h = (float *)malloc(n * sizeof(float));
@@ -1122,6 +1132,7 @@ void printDebugArr(float *arr_d, int n, char *stringa)
 
 /**
  * @brief Apply a separable convolution on the input image using the given kernel.
+ * It first applies a row convolution and then a column convolution. This is equivalent to applying a 2D convolution.
  *
  * @param img_d Input image
  * @param img_out_d Output image
@@ -1187,6 +1198,14 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
 
     cudaFree(img_temp_d);
 }
+/**
+ * @brief Wrapper for the RGB to Gray kernel.
+ *
+ * @param img_d Input image
+ * @param gray_d Output image
+ * @param N Width of the image
+ * @param M Height of the image
+ */
 void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
 {
 
@@ -1281,7 +1300,20 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     // cudaEventDestroy(start);
     // cudaEventDestroy(stop);
 }
-
+/**
+ * @brief Driver function for the Canny edge detection algorithm.
+ *
+ * @param img_data_h Host image data
+ * @param img_data_d Device image data
+ * @param sobel_x Sobel kernel in the x direction
+ * @param sobel_y Sobel kernel in the y direction
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param low_th Lower threshold for the double thresholding
+ * @param high_th Higher threshold for the double thresholding
+ * @param gauss_kernel Gaussian kernel
+ * @param g_kernel_size Size of the Gaussian kernel
+ */
 void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
 {
     size_t img_size = width * height * sizeof(float);
@@ -1353,7 +1385,21 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
         fprintf(stderr, "Error in canny kernel wrap: %s\n", cudaGetErrorString(err));
     }
 }
-
+/**
+ * @brief Driver function for the Harris corner detection algorithm.
+ *
+ * @param img_data_h Host image data
+ * @param img_data_d Device image data
+ * @param sobel_x Sobel kernel in the x direction
+ * @param sobel_y Sobel kernel in the y direction
+ * @param width Width of the image
+ * @param height Height of the image
+ * @param k K parameter for the Harris corner detection
+ * @param alpha Alpha parameter for the Harris corner detection
+ * @param gaussian_kernel Gaussian kernel
+ * @param g_kernel_size Gaussian kernel size
+ * @param shi_tomasi Flag to enable Shi-Tomasi corner detection
+ */
 void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
 {
     int n = width * height;
@@ -1462,7 +1508,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 #pragma region 7. Finding Max value in Harris response
     // cudaEventRecord(start);
 
-    find_max_reduction<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    find_max_reduction_shfl<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
@@ -1475,7 +1521,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
     // cudaEventRecord(start);
 
-    // find_max_reduction_sh<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    // find_max_reduction_shrd<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
