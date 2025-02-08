@@ -91,7 +91,7 @@ __device__ float computeMeanOrWeights(float *histogram, int start, int threshold
 
     Il threshold migliore è quello con Sigma^2_B massima
  */
-__global__ void otsu_threshold_kernel(float *image, int *histogram, float *probabilities, int width, int height, int *sigma2_b)
+__global__ void otsuThresholdKernel(float *image, int *histogram, float *probabilities, int width, int height, int *sigma2_b)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -120,7 +120,7 @@ __global__ void otsu_threshold_kernel(float *image, int *histogram, float *proba
  * @param width The width of the image.
  * @param height The height of the image.
  */
-__global__ void find_max_reduction_shrd(int *sigma2_b, int *max_threshold, int width, int height)
+__global__ void findMaxReductionSHRD(int *sigma2_b, int *max_threshold, int width, int height)
 {
     __shared__ int sigma2b_shared[256];
     __shared__ int sigma2b_shared_idx[256];
@@ -163,7 +163,7 @@ __device__ int warpReduceMax(int val)
  *
  * @param val  value to be reduced that is passed between threads withing same warp in a given block.
  */
-__device__ int block_reduce_max(int val)
+__device__ int blockReduceMax(int val)
 {
     __shared__ int shared[256 / 32];
     int tid = threadIdx.x;
@@ -194,7 +194,7 @@ __device__ int block_reduce_max(int val)
  * @param sigma2_b It will contain the sigma2_b values for each threshold.
  * @param max_threshold It will contain the maximum threshold for which the sigma2_b is maximum.
  */
-__global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold)
+__global__ void findMaxReductionSHFL(int *sigma2_b, int *max_threshold)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -214,7 +214,7 @@ __global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold)
     }
     int val = local_max_idx | local_max << 16;
     // int val = local_max;
-    int block_max = block_reduce_max(val);
+    int block_max = blockReduceMax(val);
 
     if (threadIdx.x == 0)
     {
@@ -236,7 +236,7 @@ __global__ void find_max_reduction_shfl(int *sigma2_b, int *max_threshold)
  * @param height Height of the image.
  * @param threshold Threshold to binarize the image.
  */
-__global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int width, int height, int threshold)
+__global__ void binarizeImgKernel(unsigned char *output_d, float *img_d, int width, int height, int threshold)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -256,7 +256,7 @@ __global__ void binarize_img_kernel(unsigned char *output_d, float *img_d, int w
  * @param height Height of the image.
  * @param threshold Threshold to binarize the image.
  */
-void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, int height, int threshold)
+void binarizeImgWrapper(unsigned char *img_gray_h, float *img_d, int width, int height, int threshold)
 {
     unsigned char *output_d;
     size_t img_size = width * height;
@@ -265,7 +265,7 @@ void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, in
 
     cudaMalloc(&output_d, img_size * sizeof(unsigned char));
 
-    binarize_img_kernel<<<gridSize, blockSize>>>(output_d, img_d, width, height, threshold);
+    binarizeImgKernel<<<gridSize, blockSize>>>(output_d, img_d, width, height, threshold);
 
     cudaMemcpy(img_gray_h, output_d, img_size * sizeof(unsigned char), cudaMemcpyDeviceToHost);
     cudaFree(output_d);
@@ -279,7 +279,7 @@ void binarize_img_wrapper(unsigned char *img_gray_h, float *img_d, int width, in
  * @param height The height of the image.
  * @return The Otsu threshold of the image.
  */
-int otsu_threshold(float *image, int width, int height)
+int otsuThreshold(float *image, int width, int height)
 {
     const dim3 blockSize(16, 16);
     const dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
@@ -309,7 +309,7 @@ int otsu_threshold(float *image, int width, int height)
 
     // sigma2b for each threshold
     // cudaEventRecord(start);
-    otsu_threshold_kernel<<<gridSize2, blockSize2>>>(image, histogram, probabilities, width, height, sigma2_b);
+    otsuThresholdKernel<<<gridSize2, blockSize2>>>(image, histogram, probabilities, width, height, sigma2_b);
     // cudaEventRecord(stop);
 
     // cudaEventSynchronize(stop);
@@ -321,8 +321,8 @@ int otsu_threshold(float *image, int width, int height)
     cudaMalloc(&max_threshold_d, 1 * sizeof(int));
 
     // cudaEventRecord(start);
-    // find_max_reduction_shrd<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
-    find_max_reduction_shfl<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d);
+    // findMaxReductionSHRD<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d, width, height);
+    findMaxReductionSHFL<<<gridSize2, blockSize2>>>(sigma2_b, max_threshold_d);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);

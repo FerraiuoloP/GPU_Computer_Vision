@@ -193,7 +193,7 @@ __global__ void cornerColoring(float *harris_map, uchar4 *dst_img_d, int width, 
  * @param height Height of the image
  * @param kernel_d Convolution kernel
  */
-__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, const float *d_Kernel, int filter_size, int shared_size)
+__global__ void convolutionGPU(float *result_d, float *data_d, int width, int height, const float *kernel_d, int filter_size, int shared_size)
 {
     extern __shared__ float data_flat[];
     // shared_size = (TILE_WIDTH + 2 * (kernel_size / 2));
@@ -232,7 +232,7 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
                 int shX = threadIdx.x + filter_radius + j;
                 int shY = threadIdx.y + filter_radius + i;
                 sum += data_flat[shY * shared_size + shX] *
-                       d_Kernel[(i + filter_radius) * filter_size + (j + filter_radius)];
+                       kernel_d[(i + filter_radius) * filter_size + (j + filter_radius)];
             }
         }
         result_d[y0 * width + x0] = sum;
@@ -378,13 +378,13 @@ __global__ void columnConvolution(float *data_d, float *result_d, int width, int
     }
 }
 // Simple not-optimized convolution kernel
-__global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
+__global__ void applyConvolution(float *img_d, float *img_out_d, int width, int height, float *kernel, int kernel_size)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
+    if (i < height && j < width)
     {
-        int idx = i * N + j;
+        int idx = i * width + j;
         int k = kernel_size / 2;
         float sum = 0.0f;
         for (int u = -k; u <= k; u++)
@@ -393,9 +393,9 @@ __global__ void applyConvolution(float *img_d, float *img_out_d, int N, int M, f
             {
                 int x = i + u;
                 int y = j + v;
-                if (x >= 0 && x < M && y >= 0 && y < N)
+                if (x >= 0 && x < height && y >= 0 && y < width)
                 {
-                    sum += img_d[x * N + y] * kernel[(u + k) * kernel_size + (v + k)];
+                    sum += img_d[x * width + y] * kernel[(u + k) * kernel_size + (v + k)];
                 }
             }
         }
@@ -534,7 +534,7 @@ __device__ static float atomicMax(float *address, float val)
  * @param width Width of the image
  * @param height Height of the image
  */
-__global__ void find_max_reduction_shfl(float *img, float *max_value, int width, int height)
+__global__ void findMaxReductionSHFL(float *img, float *max_value, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -574,7 +574,7 @@ __global__ void find_max_reduction_shfl(float *img, float *max_value, int width,
  * @param width Width of the image
  * @param height Height of the image
  */
-__global__ void find_max_reduction_shrd(float *img, float *max_value, int width, int height)
+__global__ void findMaxReductionSHRD(float *img, float *max_value, int width, int height)
 {
     extern __shared__ float shared_max[];
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -602,16 +602,15 @@ __global__ void find_max_reduction_shrd(float *img, float *max_value, int width,
 }
 
 /**
- * @brief Non maximum suppression kernel. It compares the current pixel with its neighbours in a window of size window_size x window_size.
+ * @brief Non maximum suppression kernel. It compares the current pixel with its neighbours in a 3x3 window.
  * If the current pixel is not the maximum, it is set to 0.
  *
  * @param harris_map Harris response map
  * @param corners_output Output image
- * @param N Width of the image
- * @param M Height of the image
- * @param window_size
+ * @param width Width of the image
+ * @param height Height of the image
  */
-__global__ void nonMaximumSuppression(float *harris_map, float *corners_output, int N, int M, int window_size)
+__global__ void nonMaximumSuppression(float *harris_map, float *corners_output, int width, int height)
 {
     // Shared memory for the tile and its border
     // 4 because the kernel size is 5, thus 5/2 = 2 and 2*2 = 4. In this way we can load the corners of the tile
@@ -619,7 +618,7 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
 
     const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
     const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
-    const int gLoc = x0 + y0 * N;
+    const int gLoc = x0 + y0 * width;
 
     // Load corners into shared memory
     if (threadIdx.x < TILE_WIDTH && threadIdx.y < TILE_WIDTH)
@@ -627,28 +626,28 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
         // Top-left corner
         int x = x0 - 1;
         int y = y0 - 1;
-        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? harris_map[x + y * N] : 0.0f;
+        data[threadIdx.y][threadIdx.x] = (x >= 0 && y >= 0) ? harris_map[x + y * width] : 0.0f;
 
         // Top-right corner
         x = x0 + 1;
         y = y0 - 1;
-        data[threadIdx.y][threadIdx.x + 2] = (x < N && y >= 0) ? harris_map[x + y * N] : 0.0f;
+        data[threadIdx.y][threadIdx.x + 2] = (x < width && y >= 0) ? harris_map[x + y * width] : 0.0f;
 
         // Bottom-left corner
         x = x0 - 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < M) ? harris_map[x + y * N] : 0.0f;
+        data[threadIdx.y + 2][threadIdx.x] = (x >= 0 && y < height) ? harris_map[x + y * width] : 0.0f;
 
         // Bottom-right corner
         x = x0 + 1;
         y = y0 + 1;
-        data[threadIdx.y + 2][threadIdx.x + 2] = (x < N && y < M) ? harris_map[x + y * N] : 0.0f;
+        data[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? harris_map[x + y * width] : 0.0f;
     }
 
     __syncthreads();
 
     // Perform convolution
-    if (x0 < N && y0 < M)
+    if (x0 < width && y0 < height)
     {
         float max_val = 0.0f;
         for (int i = -1; i <= 1; ++i)
@@ -665,13 +664,13 @@ __global__ void nonMaximumSuppression(float *harris_map, float *corners_output, 
 }
 
 // non optimized NMS(non shared memory version)
-__global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int N, int M, int window_size)
+__global__ void nonMaximumSuppression_(float *harris_map, float *corners_output, int width, int height, int window_size)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
+    if (i < height && j < width)
     {
-        int idx = i * N + j;
+        int idx = i * width + j;
         int k = window_size / 2;
         float max_val = 0.0f;
         for (int u = -k; u <= k; u++)
@@ -680,9 +679,9 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
             {
                 int x = i + u;
                 int y = j + v;
-                if (x >= 0 && x < M && y >= 0 && y < N)
+                if (x >= 0 && x < height && y >= 0 && y < width)
                 {
-                    max_val = fmaxf(max_val, harris_map[x * N + y]);
+                    max_val = fmaxf(max_val, harris_map[x * width + y]);
                 }
             }
         }
@@ -700,8 +699,7 @@ __global__ void nonMaximumSuppression_(float *harris_map, float *corners_output,
  * @param width Width of the image
  * @param height Height of the image
  */
-__global__ void
-computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
+__global__ void computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, float *corners_output, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -724,27 +722,6 @@ computeShiTommasiResponse(const float *Ixx, const float *Iyy, const float *Ixy, 
 }
 
 /**
- * @brief Utility kernel that suppress a pixel if it's lower than a given threshold.
- *
- * @param harris_map Input harris map
- * @param corners_output Output image containing the corners
- * @param N Width of the image
- * @param M Height of the image
- * @param threshold Threshold value
- */
-__global__ void applyThreshold(const float *harris_map, float *corners_output, int N, int M, float threshold)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
-    if (i < M && j < N)
-    {
-        int idx = j * M + i;
-        int val = harris_map[idx];
-        corners_output[idx] = (val > threshold) ? val : 0.0f;
-    }
-}
-
-/**
  * @brief Combine the gradient in x and y directions and compute the magnitude of the gradient along with the direction.
  *
  * @param img_sobel_x Gradient in the x direction.
@@ -754,14 +731,14 @@ __global__ void applyThreshold(const float *harris_map, float *corners_output, i
  * @param width for the image.
  * @param height for the image.
  */
-__global__ void combineGradientsKernel(float *img_sobel_x, float *img_sobel_y, float *img_sobel, float *sobel_directions, int N, int M)
+__global__ void combineGradientsKernel(float *img_sobel_x, float *img_sobel_y, float *img_sobel, float *sobel_directions, int width, int height)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (i < M && j < N)
+    if (i < width && j < height)
     {
-        int idx = i * N + j;
+        int idx = j * width + i;
         float gx = img_sobel_x[idx];
         float gy = img_sobel_y[idx];
 
@@ -1206,12 +1183,12 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
  * @param N Width of the image
  * @param M Height of the image
  */
-void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
+void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int width, int height)
 {
 
     // Launch kernel
     dim3 block(TILE_WIDTH, TILE_WIDTH);
-    dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
     // cudaEvent_t start, stop;
     // checkCuda(cudaEventCreate(&start));
@@ -1224,7 +1201,7 @@ void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
         fprintf(stderr, "Error: NULL pointer before kernel launch!\n");
     }
 
-    rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, N, M);
+    rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, width, height);
     // checkCuda(cudaEventRecord(stop));
 
     // checkCuda(cudaEventSynchronize(stop));
@@ -1244,19 +1221,6 @@ void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int N, int M)
         fprintf(stderr, "Error in kernel RGB: %s\n", cudaGetErrorName(err));
     }
 }
-void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float *kernel, int kernel_size)
-{
-    const dim3 blockSize(16, 16, 1);
-    const dim3 gridSize(N / blockSize.x + 1, M / blockSize.y + 1, 1);
-    applyConvolution<<<gridSize, blockSize>>>(img_d, img_out_d, N, M, kernel, kernel_size);
-    // printDebugArr(img_out_d, 10, (char *)"blur");
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-    {
-        fprintf(stderr, "Error in kernel GAUS: %s\n", cudaGetErrorString(err));
-    }
-    cudaDeviceSynchronize();
-}
 
 /**
  * @brief Wrapper for the convolution kernel.
@@ -1267,7 +1231,7 @@ void gaussianBlurKernelWrap(float *img_d, float *img_out_d, int N, int M, float 
  * @param data_h Height of the image
  * @param d_kernel Kernel
  */
-void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, float *__restrict__ d_kernel, int kernel_size)
+void convolutionGPUWrap(float *result_d, float *data_d, int data_w, int data_h, float *__restrict__ d_kernel, int kernel_size)
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 dimGrid(ceil((float)data_w / TILE_WIDTH), ceil((float)data_h / TILE_WIDTH));
@@ -1283,8 +1247,8 @@ void convolutionGPUWrap(float *d_Result, float *d_Data, int data_w, int data_h, 
     int sharedWidth = TILE_WIDTH + 2 * (kernel_size / 2);
     // sharedMemSize *= sharedMemSize * sharedMemSize;
 
-    // applyConvolution<<<dimGrid, blockSize>>>(d_Data, d_Result, data_w, data_h, d_kernel, kernel_size);
-    convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(d_Result, d_Data, data_w, data_h, d_kernel, kernel_size, sharedWidth);
+    // applyConvolution<<<dimGrid, blockSize>>>(data_d, result_d, data_w, data_h, d_kernel, kernel_size);
+    convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(result_d, data_d, data_w, data_h, d_kernel, kernel_size, sharedWidth);
     // cudaEventRecord(stop);
 
     // cudaEventSynchronize(stop);
@@ -1497,7 +1461,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
 #pragma region 6. Non-maximum suppression on the Harris response
     // cudaEventRecord(start);
-    nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height, g_kernel_size);
+    nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
@@ -1508,7 +1472,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 #pragma region 7. Finding Max value in Harris response
     // cudaEventRecord(start);
 
-    find_max_reduction_shfl<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    findMaxReductionSHFL<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
@@ -1521,7 +1485,7 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
     // cudaEventRecord(start);
 
-    // find_max_reduction_shrd<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
+    // findMaxReductionSHRD<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);

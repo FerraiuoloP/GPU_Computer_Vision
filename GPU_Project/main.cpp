@@ -8,7 +8,6 @@
 #include <cuda_runtime.h>
 #include "include/cuda_kernel.cuh"
 #include "include/utils.h"
-#include "include/edge_detection.h"
 
 using namespace cv;
 using namespace std;
@@ -40,7 +39,7 @@ enum Mode
 	ALL
 };
 
-void save_image(float *img_d, size_t img_size_h, int height, int width, std::string filename)
+void saveImage(float *img_d, size_t img_size_h, int height, int width, std::string filename)
 {
 	float *img_save = (float *)malloc(img_size_h);
 	cudaMemcpy(img_save, img_d, img_size_h, cudaMemcpyDeviceToHost);
@@ -58,7 +57,7 @@ void save_image(float *img_d, size_t img_size_h, int height, int width, std::str
  * @param from_video Flag to indicate if the image is taken from a video. Default is false
  * @param img_v If from_video is true, the image is passed as a cv::Mat. Default is empty
  */
-void handle_image(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool from_video = false, cv::Mat img_v = cv::Mat())
+void handleImage(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool from_video = false, cv::Mat img_v = cv::Mat())
 {
 	cv::Mat img;
 	if (!from_video)
@@ -191,7 +190,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
 		break;
 	case CANNY:
-		high_threshold = otsu_threshold(img_blurred_d, width, height);
+		high_threshold = otsuThreshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
 		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
 		break;
@@ -217,8 +216,8 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
 		break;
 	}
 	case OTSU_BIN:
-		int threshold = otsu_threshold(img_gray_d, width, height);
-		binarize_img_wrapper(img.data, img_gray_d, width, height, threshold);
+		int threshold = otsuThreshold(img_gray_d, width, height);
+		binarizeImgWrapper(img.data, img_gray_d, width, height, threshold);
 		break;
 	}
 	auto end = std::chrono::high_resolution_clock::now();
@@ -286,7 +285,7 @@ void handle_image(enum Mode mode, std::string filename, int low_threshold, int h
  * @param low_threshold Low threshold for Canny Edge Detection Manual mode
  * @param high_threshold  High threshold for Canny Edge Detection Manual mode
  */
-void handle_video(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
+void handleVideo(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
 {
 	cv::VideoCapture cap(filename);
 	if (!cap.isOpened())
@@ -313,19 +312,19 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 			std::thread t1(
 				[img](Mode mode, std::string filename, int low_threshold, int high_threshold)
 				{
-					handle_image(mode, filename, low_threshold, high_threshold, true, img);
+					handleImage(mode, filename, low_threshold, high_threshold, true, img);
 				},
 				HARRIS, filename, low_threshold, high_threshold);
 			std::thread t2(
 				[img2](Mode mode, std::string filename, int low_threshold, int high_threshold)
 				{
-					handle_image(mode, filename, low_threshold, high_threshold, true, img2);
+					handleImage(mode, filename, low_threshold, high_threshold, true, img2);
 				},
 				CANNY, filename, low_threshold, high_threshold);
 			std::thread t3(
 				[img3](Mode mode, std::string filename, int low_threshold, int high_threshold)
 				{
-					handle_image(mode, filename, low_threshold, high_threshold, true, img3);
+					handleImage(mode, filename, low_threshold, high_threshold, true, img3);
 				},
 				OTSU_BIN, filename, low_threshold, high_threshold);
 			t1.join();
@@ -334,7 +333,7 @@ void handle_video(enum Mode mode, std::string filename, int low_threshold, int h
 		}
 		else
 		{
-			handle_image(mode, filename, low_threshold, high_threshold, true, img);
+			handleImage(mode, filename, low_threshold, high_threshold, true, img);
 			// free(img.data);
 		}
 
@@ -503,7 +502,7 @@ int main(const int argc, const char **argv)
 	{
 		if (is_video)
 		{
-			handle_video(HARRIS, filename, low_threshold, high_threshold, true);
+			handleVideo(HARRIS, filename, low_threshold, high_threshold, true);
 		}
 		else
 		{
@@ -515,11 +514,11 @@ int main(const int argc, const char **argv)
 	{
 		if (is_video)
 		{
-			handle_video(mode, filename, low_threshold, high_threshold);
+			handleVideo(mode, filename, low_threshold, high_threshold);
 		}
 		else
 		{
-			handle_image(mode, filename, low_threshold, high_threshold);
+			handleImage(mode, filename, low_threshold, high_threshold);
 		}
 	}
 #pragma endregion

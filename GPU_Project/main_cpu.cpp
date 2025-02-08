@@ -6,7 +6,7 @@
 #include <iostream>
 #include <cuda_runtime.h>
 #include "include/utils.h"
-#include "include/edge_detection.h"
+#include "include/edge_detection_cpu.h"
 
 using namespace cv;
 using namespace std;
