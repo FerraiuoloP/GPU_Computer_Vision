@@ -1404,7 +1404,7 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
     // cudaEventRecord(start2);
     if (!is_video)
     {
-        for (int i = 0; i < 100; i++)
+        for (int i = 0; i < 30; i++)
         {
             hysteresis<<<grid, block>>>(output_d, width, height, true);
             cudaDeviceSynchronize();
