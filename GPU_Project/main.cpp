@@ -12,12 +12,14 @@
 using namespace cv;
 using namespace std;
 
-const float sobel_x_kernel[9] = {1, 0, -1, 2, 0, -2, 1, 0, -1};
+// const float sobel_x_kernel[9] = {1, 0, -1, 2, 0, -2, 1, 0, -1};
+const float sobel_x_kernel[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
 
 const float sobel_x_separable[3] = {1, 2, 1};
 const float sobel_x_separable_2[3] = {1, 0, -1};
 
-const float sobel_y_kernel[9] = {1, 2, 1, 0, 0, 0, -1, -2, -1};
+// const float sobel_y_kernel[9] = {1, 2, 1, 0, 0, 0, -1, -2, -1};
+const float sobel_y_kernel[9] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
 
 const float sobel_y_separable[3] = {1, 0, -1};
 const float sobel_y_separable_2[3] = {1, 2, 1};
@@ -35,8 +37,7 @@ enum Mode
 	CANNY_GUI,
 	// -O. Otsu thresholding method for image binarization
 	OTSU_BIN,
-	// -A. All at once
-	ALL
+
 };
 
 void saveImage(float *img_d, size_t img_size_h, int height, int width, std::string filename)
@@ -192,10 +193,10 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 	case CANNY:
 		high_threshold = otsuThreshold(img_blurred_d, width, height);
 		low_threshold = high_threshold / 2;
-		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH, from_video);
 		break;
 	case CANNY_MANUAL:
-		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH);
+		cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, low_threshold, high_threshold, gaussian_kernel_d, FILTER_WIDTH, from_video);
 		break;
 	case CANNY_GUI:
 	{
@@ -206,7 +207,7 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 		cv::createTrackbar("Threshold Low", "Output Image", &thresh_l, 255);
 		while (true)
 		{
-			cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH);
+			cannyMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, thresh_l, thresh_h, gaussian_kernel_d, FILTER_WIDTH, from_video);
 			cv::imshow("Output Image", img);
 			if (cv::waitKey(1) == 27) // wait to press 'esc' key
 			{
@@ -305,37 +306,9 @@ void handleVideo(enum Mode mode, std::string filename, int low_threshold, int hi
 		{
 			break;
 		}
-		if (is_all_thread)
-		{
-			cv::Mat img2 = img.clone();
-			cv::Mat img3 = img.clone();
-			std::thread t1(
-				[img](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handleImage(mode, filename, low_threshold, high_threshold, true, img);
-				},
-				HARRIS, filename, low_threshold, high_threshold);
-			std::thread t2(
-				[img2](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handleImage(mode, filename, low_threshold, high_threshold, true, img2);
-				},
-				CANNY, filename, low_threshold, high_threshold);
-			std::thread t3(
-				[img3](Mode mode, std::string filename, int low_threshold, int high_threshold)
-				{
-					handleImage(mode, filename, low_threshold, high_threshold, true, img3);
-				},
-				OTSU_BIN, filename, low_threshold, high_threshold);
-			t1.join();
-			t2.join();
-			t3.join();
-		}
-		else
-		{
-			handleImage(mode, filename, low_threshold, high_threshold, true, img);
-			// free(img.data);
-		}
+
+		handleImage(mode, filename, low_threshold, high_threshold, true, img);
+		// free(img.data);
 
 		int64 end_time = cv::getTickCount();
 		double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
@@ -377,10 +350,6 @@ int main(const int argc, const char **argv)
 	else if (strcmp(argv[1], "-S") == 0)
 	{
 		mode = SHI_TOMASI;
-	}
-	else if (strcmp(argv[1], "-A") == 0)
-	{
-		mode = ALL;
 	}
 	else
 	{
@@ -498,29 +467,16 @@ int main(const int argc, const char **argv)
 	}
 #pragma endregion
 #pragma region Driver Code
-	if (mode == ALL)
+
+	if (is_video)
 	{
-		if (is_video)
-		{
-			handleVideo(HARRIS, filename, low_threshold, high_threshold, true);
-		}
-		else
-		{
-			fprintf(stderr, "All mode is only supported for videos. Usage: %s -A -f=filename\n", argv[0]);
-			return -1;
-		}
+		handleVideo(mode, filename, low_threshold, high_threshold);
 	}
 	else
 	{
-		if (is_video)
-		{
-			handleVideo(mode, filename, low_threshold, high_threshold);
-		}
-		else
-		{
-			handleImage(mode, filename, low_threshold, high_threshold);
-		}
+		handleImage(mode, filename, low_threshold, high_threshold);
 	}
+
 #pragma endregion
 	return 0;
 }

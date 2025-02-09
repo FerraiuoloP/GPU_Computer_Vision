@@ -8,6 +8,10 @@
 #include <string>
 #include <assert.h>
 #include "../include/cuda_kernel.cuh"
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
 using namespace std;
 #define TILE_WIDTH 16 // 16 X 16 TILE
 
@@ -790,55 +794,113 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
         y = y0 + 1;
         img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x + 2] = (x < width && y < height) ? img_magn_gradient[x + y * width] : 0.0f;
     }
+    __syncthreads();
     if (x0 < width && y0 < height)
     {
         int idx = y0 * width + x0;
-        // neighbours magnitude in the N/W and S/E directions
-        float neigh_1 = 0.0f;
-        float neigh_2 = 0.0f;
-        // Gradient direction expressed in degrees
-        float angle = img_dir_gradient[idx] * 180.0 / M_PI; // Converti in gradi
+
+        /**
+         * NMS without Interpolation
+         *
+         */
+
+        // // neighbours magnitude in the N/W and S/E directions
+        // float neigh_1 = 0.0f;
+        // float neigh_2 = 0.0f;
+        // // Gradient direction expressed in degrees
+        // float angle = img_dir_gradient[idx] * 180.0 / M_PI; // Converti in gradi
+        // if (angle < 0)
+        //     angle += 180.0;
+        // // If the angle rounded down is 0 or 180 degrees, the edge is vertical thus the neighbours are to the left and right
+        // if ((angle >= 0 && angle < 22.5f) || (angle >= 157.5f && angle <= 180.))
+        // // if ((angle >= 0 && angle < 22.5f) || (angle >= 157.5f && angle <= 180.0f))
+        // {
+        //     // neigh_1 = img_magn_gradient[idx + 1];
+        //     neigh_1 = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 2];
+        //     // neigh_2 = img_magn_gradient[idx - 1];
+        //     neigh_2 = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x];
+        // }
+        // // If the angle rounded down is 45 degrees, the edge is diagonal thus the neighbours are to the top right and bottom left
+        // if (angle >= 22.5f && angle < 67.5f)
+        // {
+        //     // neigh_1 = img_magn_gradient[idx + width - 1];
+        //     neigh_1 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x];
+        //     // neigh_2 = img_magn_gradient[idx - width + 1];
+        //     neigh_2 = img_magn_gradient_shared[threadIdx.y][threadIdx.x + 2];
+        // }
+        // // If the angle rounded down is 90 degrees the edge is horizontal thus the neighbours are above and below
+        // if (angle >= 67.5f && angle < 112.5f)
+        // {
+        //     // neigh_1 = img_magn_gradient[idx + width];
+        //     neigh_1 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x + 1];
+        //     // neigh_2 = img_magn_gradient[idx - width];
+        //     neigh_2 = img_magn_gradient_shared[threadIdx.y][threadIdx.x + 1];
+        // }
+        // // If the angle rounded down is 135 degrees the edge is diagonal thus the neighbours are to the top left and bottom right
+        // if (angle >= 112.5f && angle < 157.5f)
+        // {
+        //     // neigh_1 = img_magn_gradient[idx - width - 1];
+        //     neigh_1 = img_magn_gradient_shared[threadIdx.y][threadIdx.x];
+        //     // neigh_2 = img_magn_gradient[idx + width + 1];
+        //     neigh_2 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x + 2];
+        // }
+        // // If the pixel is not the maximum, set it to 0
+        // // if (img_magn_gradient[idx] > neigh_1 && img_magn_gradient[idx] > neigh_2)
+        // float tmp = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1];
+        // if (tmp > neigh_1 && tmp > neigh_2)
+        // {
+        //     // img_output[idx] = img_magn_gradient[idx];
+        //     img_output[idx] = tmp;
+        // }
+        // else
+        // {
+        //     img_output[idx] = 0.0f;
+        // }
+
+        /**
+         * NMS with Bilinear Interpolation
+         *
+         */
+        float curMag = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1];
+        float angle = img_dir_gradient[idx];
         if (angle < 0)
-            angle += 180.0;
-        // If the angle rounded down is 0 or 180 degrees, the edge is vertical thus the neighbours are to the left and right
-        if ((angle >= 0 && angle < 22.5f) || (angle >= 157.5f && angle <= 180.))
-        // if ((angle >= 0 && angle < 22.5f) || (angle >= 157.5f && angle <= 180.0f))
+            angle += M_PI;
+
+        float dx = cosf(angle);
+        float dy = sinf(angle);
+
+        float pos_x = x0 + dx;
+        float pos_y = y0 + dy;
+        float neg_x = x0 - dx;
+        float neg_y = y0 - dy;
+
+        // Bilinear interpolation for positive neighbour
+        int pos_x0 = floorf(pos_x);
+        int pos_y0 = floorf(pos_y);
+        int pos_x1 = pos_x0 + 1;
+        int pos_y1 = pos_y0 + 1;
+        float wx = pos_x - pos_x0;
+        float wy = pos_y - pos_y0;
+        float pos_neigh = (1.0f - wx) * (1.0f - wy) * img_magn_gradient[pos_y0 * width + pos_x0] +
+                          wx * (1.0f - wy) * img_magn_gradient[pos_y0 * width + pos_x1] +
+                          (1.0f - wx) * wy * img_magn_gradient[pos_y1 * width + pos_x0] +
+                          wx * wy * img_magn_gradient[pos_y1 * width + pos_x1];
+
+        // Bilinear interpolation for negative neighbour
+        int neg_x0 = floorf(neg_x);
+        int neg_y0 = floorf(neg_y);
+        int neg_x1 = neg_x0 + 1;
+        int neg_y1 = neg_y0 + 1;
+        float wx_neg = neg_x - neg_x0;
+        float wy_neg = neg_y - neg_y0;
+        float neg_neigh = (1.0f - wx_neg) * (1.0f - wy_neg) * img_magn_gradient[neg_y0 * width + neg_x0] +
+                          wx_neg * (1.0f - wy_neg) * img_magn_gradient[neg_y0 * width + neg_x1] +
+                          (1.0f - wx_neg) * wy_neg * img_magn_gradient[neg_y1 * width + neg_x0] +
+                          wx_neg * wy_neg * img_magn_gradient[neg_y1 * width + neg_x1];
+
+        if (curMag >= pos_neigh && curMag >= neg_neigh)
         {
-            // neigh_1 = img_magn_gradient[idx + 1];
-            neigh_1 = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 2];
-            // neigh_2 = img_magn_gradient[idx - 1];
-            neigh_2 = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x];
-        }
-        // If the angle rounded down is 45 degrees, the edge is diagonal thus the neighbours are to the top right and bottom left
-        if (angle >= 22.5f && angle < 67.5f)
-        {
-            // neigh_1 = img_magn_gradient[idx + width - 1];
-            neigh_1 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x];
-            // neigh_2 = img_magn_gradient[idx - width + 1];
-            neigh_2 = img_magn_gradient_shared[threadIdx.y][threadIdx.x + 2];
-        }
-        // If the angle rounded down is 90 degrees the edge is horizontal thus the neighbours are above and below
-        if (angle >= 67.5f && angle < 112.5f)
-        {
-            // neigh_1 = img_magn_gradient[idx + width];
-            neigh_1 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x + 1];
-            // neigh_2 = img_magn_gradient[idx - width];
-            neigh_2 = img_magn_gradient_shared[threadIdx.y][threadIdx.x + 1];
-        }
-        // If the angle rounded down is 135 degrees the edge is diagonal thus the neighbours are to the top left and bottom right
-        if (angle >= 112.5f && angle < 157.5f)
-        {
-            // neigh_1 = img_magn_gradient[idx - width - 1];
-            neigh_1 = img_magn_gradient_shared[threadIdx.y][threadIdx.x];
-            // neigh_2 = img_magn_gradient[idx + width + 1];
-            neigh_2 = img_magn_gradient_shared[threadIdx.y + 2][threadIdx.x + 2];
-        }
-        // If the pixel is not the maximum, set it to 0
-        // if (img_magn_gradient[idx] > neigh_1 && img_magn_gradient[idx] > neigh_2)
-        if (img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1] > neigh_1 && img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1] > neigh_2)
-        {
-            // img_output[idx] = img_magn_gradient[idx];
-            img_output[idx] = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1];
+            img_output[idx] = curMag;
         }
         else
         {
@@ -846,6 +908,7 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
         }
     }
 }
+
 /**
  * @brief Compute a non maximum suppression on the gradient magnitude image. Each pixel is compared with its neighbors in the direction of the gradient. If the pixel is not the maximum, it is set to 0.
  * Non shared memory version
@@ -953,52 +1016,51 @@ __global__ void doubleThresholdSuppression(float *LBCOS_img, float *two_th_supr_
 //  * @param height height of the image
 //  * NON SHARED
 //  */
-// __global__ void hysteresis(float *TTS_img, int width, int height)
-// {
-//     int x = threadIdx.x + blockIdx.x * blockDim.x;
-//     int y = threadIdx.y + blockIdx.y * blockDim.y;
+__global__ void hysteresis_(float *TTS_img, int width, int height)
+{
+    int x = threadIdx.x + blockIdx.x * blockDim.x;
+    int y = threadIdx.y + blockIdx.y * blockDim.y;
 
-//     if (x < width - 1 && y < height - 1)
-//     {
-//         int idx = y * width + x;
-//         // int idx = x + y * width;
-//         int size = width * height;
-//         if (TTS_img[idx] >= 255.0f)
-//         {
-//             TTS_img[idx] = 255.0f; // strong edge is kept
-//         }
-//         else if (TTS_img[idx] >= 128.0f)
-//         {
-//             bool is_connected_to_strong = false;
-//             // printf("weak edge\n");
-//             // blob analysis
-//             for (int i = -1; i <= 1 && !is_connected_to_strong; i++)
-//             {
-//                 for (int j = -1; j <= 1; j++)
-//                 {
-//                     int neighbour_idx = (y + j) * width + (x + i);
-//                     if (neighbour_idx >= 0 && neighbour_idx < size && TTS_img[neighbour_idx] >= 255.0f)
-//                     {
-//                         is_connected_to_strong = true;
-//                         break;
-//                     }
-//                 }
-//             }
-//             if (is_connected_to_strong)
-//             {
-//                 TTS_img[idx] = 255.0f;
-//             }
-//             else
-//             {
-//                 TTS_img[idx] = 0.0f;
-//             }
-//         }
-//         else
-//         {
-//             TTS_img[idx] = 0.0f;
-//         }
-//     }
-// }
+    if (x < width - 1 && y < height - 1)
+    {
+        int idx = y * width + x;
+        // int idx = x + y * width;
+        int size = width * height;
+        if (TTS_img[idx] >= 255.0f)
+            return;
+        if (TTS_img[idx] >= 128.0f)
+        {
+            bool is_connected_to_strong = false;
+            // printf("weak edge\n");
+            // blob analysis
+            for (int i = -1; i <= 1 && !is_connected_to_strong; i++)
+            {
+                for (int j = -1; j <= 1; j++)
+                {
+                    int neighbour_idx = (y + j) * width + (x + i);
+                    if (neighbour_idx >= 0 && neighbour_idx < size && TTS_img[neighbour_idx] >= 255.0f)
+                    {
+                        is_connected_to_strong = true;
+                        break;
+                    }
+                }
+            }
+            if (is_connected_to_strong)
+            {
+                TTS_img[idx] = 255.0f;
+            }
+            else
+            {
+                TTS_img[idx] = 0.0f;
+            }
+        }
+        else
+        {
+            TTS_img[idx] = 0.0f;
+        }
+    }
+}
+
 /**
  * @brief Compute the hysteresis thresholding. If the pixel is a weak edge and has a strong edge neighbour, it is marked as a strong edge.
  * @cite https://en.wikipedia.org/wiki/Canny_edge_detector#Edge_tracking_by_hysteresis for further details.
@@ -1008,9 +1070,12 @@ __global__ void doubleThresholdSuppression(float *LBCOS_img, float *two_th_supr_
  * @param height height of the image
  * SHARED
  */
-__global__ void hysteresis(float *TTS_img, int width, int height)
+#define WEAK_EDGE 128.0f
+#define STRONG_EDGE 255.0f
+__global__ void hysteresis(float *TTS_img, int width, int height, bool iterative)
 {
-    __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
+    // __shared__ float data[TILE_WIDTH + FILTER_WIDTH / 2 * 2][TILE_WIDTH + FILTER_WIDTH / 2 * 2];
+    __shared__ float data[TILE_WIDTH + 2][TILE_WIDTH + 2];
 
     const int x0 = threadIdx.x + blockIdx.x * blockDim.x;
     const int y0 = threadIdx.y + blockIdx.y * blockDim.y;
@@ -1045,40 +1110,36 @@ __global__ void hysteresis(float *TTS_img, int width, int height)
     float tts_val = 0.0f;
     if (x0 < width - 1 && y0 < height - 1)
     {
-        if (data[threadIdx.y + 1][threadIdx.x + 1] >= 255.0f)
+        float val = data[threadIdx.y + 1][threadIdx.x + 1];
+        if (val >= STRONG_EDGE)
         {
-
             tts_val = 255.0f;
         }
-        else if (data[threadIdx.y + 1][threadIdx.x + 1] >= 128.0f)
+        else if (val >= WEAK_EDGE)
         {
             bool is_connected_to_strong = false;
 
-            // Perform convolution
-            if (x0 < width && y0 < height)
+            // Perform local blob analysis
+            // if (x0 < width && y0 < height)
+            // {
+            // bool is_connected_to_strong = false;
+            for (int i = -1; i <= 1 && !is_connected_to_strong; i++)
             {
-                bool is_connected_to_strong = false;
-                for (int i = -1; i <= 1 && !is_connected_to_strong; ++i)
+                for (int j = -1; j <= 1; j++)
                 {
-                    for (int j = -1; j <= 1; ++j)
+                    int neighbour_idx = (threadIdx.y + 1 + i) * width + (threadIdx.x + 1 + j);
+                    if (neighbour_idx >= 0 && neighbour_idx < width * height && data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] >= 255.0f)
                     {
-                        int neighbour_idx = (threadIdx.y + 1 + i) * width + (threadIdx.x + 1 + j);
-                        if (neighbour_idx >= 0 && neighbour_idx < width * height && data[threadIdx.y + 1 + i][threadIdx.x + 1 + j] >= 255.0f)
-                        {
-                            is_connected_to_strong = true;
-                            break;
-                        }
+                        is_connected_to_strong = true;
+                        break;
                     }
                 }
             }
-            if (is_connected_to_strong)
-            {
-                tts_val = 255.0f;
-            }
+            // }
+            if (iterative)
+                tts_val = is_connected_to_strong ? STRONG_EDGE : WEAK_EDGE;
             else
-            {
-                tts_val = 0.0f;
-            }
+                tts_val = is_connected_to_strong ? STRONG_EDGE : 0.0f;
         }
         else
         {
@@ -1278,7 +1339,7 @@ void convolutionGPUWrap(float *result_d, float *data_d, int data_w, int data_h, 
  * @param gauss_kernel Gaussian kernel
  * @param g_kernel_size Size of the Gaussian kernel
  */
-void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size)
+void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float low_th, float high_th, float *gauss_kernel, int g_kernel_size, bool is_video)
 {
     size_t img_size = width * height * sizeof(float);
     // float milliseconds = 0;
@@ -1305,10 +1366,23 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
 
     // 1. Combining gradients to get magnitude and direction of each pixel
     combineGradientsKernel<<<grid, block>>>(sobel_x, sobel_y, img_sobel, sobel_directions, width, height);
+    // // save image
+    // cudaMemcpy(img_debug_h, img_sobel, img_size, cudaMemcpyDeviceToHost);
+    // cv::Mat printImage(height, width, CV_32F, img_debug_h);
+    // cv::Mat displayImage1;
+    // printImage.convertTo(displayImage1, CV_8UC1, 1.0);
+    // cv::imwrite("debug/combined_gradients_cuda.jpg", displayImage1);
+    // save it to a file
+
     cudaDeviceSynchronize();
     // 2. Lower bound cutoff suppression to suppress non-maximum pixels with respect to the gradient direction
     // cudaEventRecord(start);
     lowerBoundCutoffSuppression_sh<<<grid, block>>>(img_sobel, sobel_directions, lbcs_img, width, height);
+    // cudaMemcpy(img_debug_h, lbcs_img, img_size, cudaMemcpyDeviceToHost);
+    // cv::Mat printImage2(height, width, CV_32F, img_debug_h);
+    // cv::Mat displayImage2;
+    // printImage2.convertTo(displayImage2, CV_8UC1, 1.0);
+    // cv::imwrite("debug/lbcs_cuda.jpg", displayImage2);
     cudaDeviceSynchronize();
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
@@ -1317,13 +1391,26 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
 
     // 3. Double thresholding suppression to mark edge pixels as strong, weak or non-edge
     doubleThresholdSuppression<<<grid, block>>>(lbcs_img, output_d, width, height, low_th, high_th);
+    // cudaMemcpy(img_debug_h, output_d, img_size, cudaMemcpyDeviceToHost);
+    // cv::Mat printImage3(height, width, CV_32F, img_debug_h);
+    // cv::Mat displayImage3;
+    // printImage3.convertTo(displayImage3, CV_8UC1, 1.0);
+    // cv::imwrite("debug/double_threshold_cuda.jpg", displayImage3);
     cudaDeviceSynchronize();
     // cudaEventCreate(&start2);
     // cudaEventCreate(&stop2);
 
     // 4. Hysteresis to mark weak edge pixels as strong if they are connected to strong edge pixels
     // cudaEventRecord(start2);
-    hysteresis<<<grid, block>>>(output_d, width, height);
+    if (!is_video)
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            hysteresis<<<grid, block>>>(output_d, width, height, true);
+            cudaDeviceSynchronize();
+        }
+    }
+    hysteresis<<<grid, block>>>(output_d, width, height, false);
     cudaDeviceSynchronize();
     // cudaEventRecord(stop2);
     // cudaEventSynchronize(stop2);
