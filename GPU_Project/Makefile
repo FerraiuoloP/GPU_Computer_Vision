@@ -1,5 +1,5 @@
 # Variables
-CCBIN = g++
+CCBIN = g++-9
 CUDA_STD = -std=c++14
 PKG_CONFIG = $(shell pkg-config --cflags --libs opencv4)
 NVCC = nvcc -arch=sm_75

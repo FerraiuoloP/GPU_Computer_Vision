@@ -1451,7 +1451,7 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
  * @param g_kernel_size Gaussian kernel size
  * @param shi_tomasi Flag to enable Shi-Tomasi corner detection
  */
-void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi)
+float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi, float *harris_map_d)
 {
     int n = width * height;
     // float milliseconds = 0;
@@ -1550,6 +1550,9 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // cudaEventRecord(start);
     nonMaximumSuppression<<<gridSize, blockSize>>>(output_d, output_d, width, height);
 
+    if (harris_map_d != nullptr)
+        cudaMemcpy(harris_map_d, output_d, width * height * sizeof(float), cudaMemcpyDeviceToDevice);
+
     // cudaEventRecord(stop);
     // cudaEventSynchronize(stop);
     // cudaEventElapsedTime(&milliseconds, start, stop);
@@ -1568,7 +1571,8 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
 
     // debug only
     cudaMemcpy(&max_value_f, max_value_d, sizeof(float), cudaMemcpyDeviceToHost);
-    printf("Max value in Harris response Shfl: %f\n", max_value_f);
+
+    // printf("Max value in Harris response Shfl: %f\n", max_value_f);
 
     // cudaEventRecord(start);
 
@@ -1579,10 +1583,13 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     // cudaEventElapsedTime(&milliseconds, start, stop);
     // printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
     // printf("Max value in Harris response Shrd: %f\n", max_value_f);
+
 #pragma endregion
 
 #pragma region 8. Corner thresholding
-    cornerColoring<<<gridSize, blockSize>>>(output_d, img_data_d, width, height, max_value_f * alpha);
+    float treshold = max_value_f * alpha;
+    if (harris_map_d == nullptr) // Naive optical flow, no need to color corners
+        cornerColoring<<<gridSize, blockSize>>>(output_d, img_data_d, width, height, treshold);
     cudaMemcpy(img_data_h, img_data_d, width * height * sizeof(uchar4), cudaMemcpyDeviceToHost);
 #pragma endregion
 
@@ -1610,4 +1617,108 @@ void harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x
     {
         fprintf(stderr, "Error in harris kernel wrap: %s\n", cudaGetErrorString(err));
     }
+
+    return treshold;
+}
+
+
+__global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
+                                       const float *__restrict__ harris2,
+                                       int width, int height,
+                                       float threshold, float tolerance,
+                                       int window,
+                                       int *d_idx1Mapping, int *d_idx2Mapping,
+                                       int *d_mappingCount)
+{
+    // Compute thread position
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= width || y >= height)
+        return;
+
+    int idx = y * width + x;
+
+
+    __shared__ float sharedHarris1[TILE_WIDTH][TILE_WIDTH]; 
+
+
+    int localX = threadIdx.x;
+    int localY = threadIdx.y;
+
+    sharedHarris1[localY][localX] = harris1[idx];
+    
+
+    __syncthreads(); // Ensure all threads have loaded data
+
+    // Only process if the corner response is significant
+    if (sharedHarris1[localY][localX] > threshold)
+    {
+        float bestMatchDiff = threshold * tolerance;
+        int bestMatchIdx = -1;
+
+        // Searching within the window
+        for (int j = -window; j <= window; j++)
+        {
+            int y2 = y + j;
+            if (y2 < 0 || y2 >= height)
+                continue;
+
+            for (int i = -window; i <= window; i++)
+            {
+                int x2 = x + i;
+                if (x2 < 0 || x2 >= width)
+                    continue;
+
+                int idx2 = y2 * width + x2;
+                float diff = fabsf(sharedHarris1[localY][localX] - harris2[idx2]);
+
+                if (harris2[idx2] > threshold && diff < bestMatchDiff)
+                {
+                    bestMatchDiff = diff;
+                    bestMatchIdx = idx2;
+                }
+            }
+        }
+
+        if (bestMatchIdx != -1)
+        {
+            int pos = atomicAdd(d_mappingCount, 1);
+            d_idx1Mapping[pos] = idx;
+            d_idx2Mapping[pos] = bestMatchIdx;
+        }
+    }
+}
+
+int mapCommonKernelWrap(const float *harris1,
+                        const float *harris2,
+                        int width,
+                        int height,
+                        float threshold,
+                        const float tollerance,
+                        int window,
+                        int *d_idx1Mapping,
+                        int *d_idx2Mapping)
+{
+    dim3 block(TILE_WIDTH, TILE_WIDTH);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+
+    int *mappingCount_d;
+    cudaMalloc(&mappingCount_d, sizeof(int));
+    cudaMemset(mappingCount_d, 0, sizeof(int));
+
+    mapCommonCornersKernel<<<grid, block>>>(harris1, harris2, width, height, threshold, tollerance, window, d_idx1Mapping, d_idx2Mapping, mappingCount_d);
+    cudaDeviceSynchronize();
+
+    int mappingCount_h;
+    cudaMemcpy(&mappingCount_h, mappingCount_d, sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaFree(mappingCount_d);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, "Error in mapCommon kernel wrap: %s\n", cudaGetErrorString(err));
+    }
+    return mappingCount_h;
 }

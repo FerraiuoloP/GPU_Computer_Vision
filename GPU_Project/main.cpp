@@ -37,6 +37,10 @@ enum Mode
 	CANNY_GUI,
 	// -O. Otsu thresholding method for image binarization
 	OTSU_BIN,
+	// -A. All at once
+	ALL,
+	// -OP. Optical Flow naive implementation
+	OPTICAL
 
 };
 
@@ -150,19 +154,9 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 
 	// RGB to Gray
 	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
-	// show rgb to gray image
-	// cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	// saveImage(height, width, img_gray_h, "debug/gray_cuda.jpg");
-
-	// //convert to host
-	// cudaMemcpy(img_gray_h, img_gray_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	// showImage(height,width,img_gray_h, "Gray Image");
 
 	// Apply Gaussian Blur to grayscale image
 	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d, FILTER_WIDTH);
-	// save image
-	// cudaMemcpy(img_gray_h, img_blurred_d, img_gray_size_h, cudaMemcpyDeviceToHost);
-	// saveImage(height, width, img_gray_h, "debug/blurred_cuda.jpg");
 
 	// Sobel X
 	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d, 3);
@@ -184,11 +178,11 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 	case HARRIS:
 
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
-		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false);
+		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false,nullptr);
 		break;
 	case SHI_TOMASI:
 		// harrisCornerDetector(&img, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
-		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true);
+		harrisMainKernelWrap((uchar4 *)img.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, true,nullptr);
 		break;
 	case CANNY:
 		high_threshold = otsuThreshold(img_blurred_d, width, height);
@@ -319,12 +313,279 @@ void handleVideo(enum Mode mode, std::string filename, int low_threshold, int hi
 		{
 			break;
 		}
+	
 		// debug++;
 		// if(debug == 2){
 		// 	break;
 		// }
 	}
 }
+
+void opticalNaive(std::string filename,std::string filename2,bool video){
+
+	cv::Mat prev_frame, next_frame;
+	
+	cv::VideoCapture cap(filename);
+
+	if (video){
+	if (!cap.isOpened())
+	{
+		std::cerr << "Error: Unable to load video." << std::endl;
+		return;
+	}
+	
+	cap >> prev_frame;
+	cap >> next_frame;
+	}
+	else{
+		prev_frame = cv::imread(filename, cv::IMREAD_COLOR);
+		next_frame = cv::imread(filename2, cv::IMREAD_COLOR);
+	}
+	cv::Mat img_display = next_frame.clone();
+	
+	cv::cvtColor(prev_frame, prev_frame, cv::COLOR_BGR2RGBA);
+	cv::cvtColor(next_frame, next_frame, cv::COLOR_BGR2RGBA);
+
+
+	bool first = true;
+
+	// variable declarations
+	int width = prev_frame.cols;
+	int height = prev_frame.rows;
+	int channels = prev_frame.channels();
+	float treshold=0.1;
+	printf("Channels: %d\n", channels);
+	size_t img_size_h = width * height * channels * sizeof(unsigned char);
+	size_t img_gray_size_h = width * height * sizeof(float);
+
+	
+
+	// device variable declarations
+	uchar4 *img_d;
+	uchar4 *img_d_2;
+	float *img_gray_d;
+	float *img_blurred_d;
+	float *img_harris_d;
+	float *img_sobel_x_d;
+	float *img_sobel_x_d_2;
+	float *img_sobel_y_d;
+	float *img_sobel_y_d_2;
+	float *img_gray_d_2;
+	float *img_blurred_d_2;
+
+	// mallocs
+	unsigned char *img_h = (unsigned char *)malloc(img_size_h);
+
+
+	// kernel devices
+	float *sobel_x_kernel_d;
+	float *sobel_y_kernel_d;
+	float *gaussian_kernel = computeGaussianKernel(FILTER_WIDTH, FILTER_SIGMA);
+	float *gaussian_kernel_d;
+	float* harris_map1_d;
+	float* harris_map2_d; 
+	int* idx1Mapping_d;
+	int * idx2Mapping_d;
+
+	// data to host
+	cudaMalloc(&img_d, img_size_h);
+	cudaMalloc(&img_d_2, img_size_h);
+	cudaMalloc(&img_gray_d, img_gray_size_h);
+	cudaMalloc(&img_gray_d_2, img_gray_size_h);
+	cudaMalloc(&img_blurred_d, img_gray_size_h);
+	cudaMalloc(&img_blurred_d_2, img_gray_size_h);
+	cudaMalloc(&gaussian_kernel_d, FILTER_WIDTH * FILTER_WIDTH * sizeof(float));
+	cudaMalloc(&sobel_x_kernel_d, 3 * 3 * sizeof(float));
+	cudaMalloc(&sobel_y_kernel_d, 3 * 3 * sizeof(float));
+	cudaMalloc(&img_sobel_x_d, img_gray_size_h);
+	cudaMalloc(&img_sobel_x_d_2, img_gray_size_h);
+	cudaMalloc(&img_sobel_y_d, img_gray_size_h);
+	cudaMalloc(&img_sobel_y_d_2, img_gray_size_h);
+	cudaMalloc(&img_harris_d, img_gray_size_h);
+	cudaMalloc(&harris_map1_d, img_gray_size_h);
+	cudaMalloc(&harris_map2_d, img_gray_size_h);
+	cudaMalloc(&idx1Mapping_d, img_gray_size_h);
+	cudaMalloc(&idx2Mapping_d, img_gray_size_h);
+
+	
+	cudaMemcpy(img_d, prev_frame.data, img_size_h, cudaMemcpyHostToDevice);
+	cudaMemcpy(img_d_2, next_frame.data, img_size_h, cudaMemcpyHostToDevice);
+	cudaMemcpy(gaussian_kernel_d, gaussian_kernel, FILTER_WIDTH * FILTER_WIDTH * sizeof(float), cudaMemcpyHostToDevice);
+
+
+	cudaMemcpy(sobel_x_kernel_d, sobel_x_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(sobel_y_kernel_d, sobel_y_kernel, 3 * 3 * sizeof(float), cudaMemcpyHostToDevice);
+	
+
+
+	int* idx1Mapping_h = (int*)malloc(width * height * sizeof(int));
+	int* idx2Mapping_h = (int*)malloc(width * height * sizeof(int));
+	int mappingCount = 0;
+
+	while(true){
+
+		if(!first){
+				cap >> next_frame;
+				if (next_frame.empty())
+				{
+					break;
+				}
+				img_display = next_frame.clone();
+				cv::cvtColor(next_frame, next_frame, cv::COLOR_BGR2RGBA);
+				cv::cvtColor(prev_frame, prev_frame, cv::COLOR_BGR2RGBA);
+				
+				cudaMemcpy(img_d_2, next_frame.data, img_size_h, cudaMemcpyHostToDevice);
+		}
+		
+
+
+	
+	cudaDeviceSynchronize();
+
+
+	// RGB to Gray
+	if(first)
+	rgbToGrayKernelWrap(img_d, img_gray_d, width, height);
+	rgbToGrayKernelWrap(img_d_2, img_gray_d_2, width, height);
+
+
+	// //convert to host
+
+
+	// Apply Gaussian Blur to grayscale image
+	if(first)
+	convolutionGPUWrap(img_blurred_d, img_gray_d, width, height, gaussian_kernel_d,3);
+	convolutionGPUWrap(img_blurred_d_2, img_gray_d_2, width, height, gaussian_kernel_d,3);
+
+	// Sobel X
+	if(first)
+	convolutionGPUWrap(img_sobel_x_d, img_blurred_d, width, height, sobel_x_kernel_d,3);
+	convolutionGPUWrap(img_sobel_x_d_2, img_blurred_d_2, width, height, sobel_x_kernel_d,3);
+
+
+
+	// Sobel Y
+	if(first)
+	convolutionGPUWrap(img_sobel_y_d, img_blurred_d, width, height, sobel_y_kernel_d,3);
+	convolutionGPUWrap(img_sobel_y_d_2, img_blurred_d_2, width, height, sobel_y_kernel_d,3);
+
+	if(first)
+	harrisMainKernelWrap((uchar4*)prev_frame.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false,harris_map1_d);
+	treshold=harrisMainKernelWrap((uchar4*)next_frame.data, img_d_2, img_sobel_x_d_2, img_sobel_y_d_2, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false,harris_map2_d);
+	
+	
+	//0.001,200 for 1-opt and 2-opt
+	//0.1,5 for cars
+	//0.5,5 for arrows
+	mappingCount=mapCommonKernelWrap(harris_map1_d,harris_map2_d,width,height,treshold,0.1,5 ,idx1Mapping_d,idx2Mapping_d);
+	
+	cudaDeviceSynchronize();
+
+	cudaMemcpy(idx1Mapping_h, idx1Mapping_d, width * height * sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy(idx2Mapping_h, idx2Mapping_d, width * height * sizeof(int), cudaMemcpyDeviceToHost);
+	
+	cv::Point2f sumVec(0, 0);
+	int validCount = 0;
+
+	//draw motion vectors: on CPU because small amount of data + this is just for visualization purposes (and the implementation of our optical flow is just a naive demonstration)
+	for (int i = 0; i < mappingCount; i++) {
+		cv::Point pt1 = cv::Point(idx1Mapping_h[i] % next_frame.cols, idx1Mapping_h[i] / next_frame.cols);
+		cv::Point pt2 = cv::Point(idx2Mapping_h[i] % next_frame.cols, idx2Mapping_h[i] / next_frame.cols);
+	
+		if ((pt1.x != pt2.x || pt1.y != pt2.y) &&
+			pt1.x >= 0 && pt1.y >= 0 && pt1.x < prev_frame.cols && pt1.y < prev_frame.rows &&
+			pt2.x >= 0 && pt2.y >= 0 && pt2.x < next_frame.cols && pt2.y < next_frame.rows) {
+	
+			cv::Scalar lightGreen(0, 0, 255);  
+			double tipLength = 0.08; 
+
+			cv::arrowedLine(next_frame, pt1, pt2, lightGreen, 1.5, cv::LINE_AA, 0, tipLength);
+			
+			//accumulate motion vector
+			sumVec += Point2f(pt2 - pt1);
+			validCount++;
+		}
+	}
+	// average motion vector
+	if (validCount > 0) {
+		sumVec.x /= validCount;
+		sumVec.y /= validCount;
+	
+		
+		cv::Point center(next_frame.cols / 2, next_frame.rows / 2);
+		cv::Point avgEnd = center + cv::Point(sumVec.x * 20, sumVec.y * 20); 
+	
+		//clamp to image size
+		avgEnd.x = std::max(0, std::min(avgEnd.x, next_frame.cols - 1));
+		avgEnd.y = std::max(0, std::min(avgEnd.y, next_frame.rows - 1));
+		cv::Scalar red(255, 0, 0); 
+		cv::arrowedLine(next_frame, center, avgEnd, red, 2, cv::LINE_AA, 0, 0.5);
+	}
+
+
+	//BACK TO RGB
+	cv::cvtColor(next_frame, next_frame, cv::COLOR_RGBA2BGR);
+	cv::imshow("Frame", next_frame);
+
+
+	if (cv::waitKey(1) == 27) // 27=esc key
+	{
+		break;
+	}
+
+	if (!video)
+	{
+		cv::waitKey(0);
+		break;
+	}
+	
+	//std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+	
+
+	first = false;
+	prev_frame = next_frame.clone();
+	cudaMemcpy(img_d, img_d_2, img_size_h, cudaMemcpyDeviceToDevice);
+	cudaMemcpy(img_gray_d,img_gray_d_2,width*height*sizeof(float),cudaMemcpyDeviceToDevice);
+	cudaMemcpy(img_blurred_d,img_blurred_d_2,width*height*sizeof(float),cudaMemcpyDeviceToDevice);
+	cudaMemcpy(img_sobel_x_d,img_sobel_x_d_2,width*height*sizeof(float),cudaMemcpyDeviceToDevice);
+	cudaMemcpy(img_sobel_y_d,img_sobel_y_d_2,width*height*sizeof(float),cudaMemcpyDeviceToDevice);
+	cudaMemcpy(harris_map1_d,harris_map2_d,width*height*sizeof(float),cudaMemcpyDeviceToDevice);
+	cudaMemcpy(idx1Mapping_d,idx2Mapping_d,width*height*sizeof(int),cudaMemcpyDeviceToDevice);
+	cudaDeviceSynchronize();
+	
+
+
+}
+
+	
+	// (cuda)memory deallocations	
+	cudaFree(img_d);
+	cudaFree(img_d_2);
+	cudaFree(img_gray_d);
+	cudaFree(img_gray_d_2);
+	cudaFree(img_blurred_d);
+	cudaFree(img_blurred_d_2);
+	cudaFree(gaussian_kernel_d);
+	cudaFree(sobel_x_kernel_d);
+	cudaFree(sobel_y_kernel_d);
+	cudaFree(img_sobel_x_d);
+	cudaFree(img_sobel_x_d_2);
+	cudaFree(img_sobel_y_d);
+	cudaFree(img_sobel_y_d_2);
+	cudaFree(img_harris_d);
+	
+	free(img_h);
+	// Error checking
+	cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess)
+	{
+		fprintf(stderr, "Error in main kernels: %s\n", cudaGetErrorString(err));
+	}
+
+}
+
+
 int main(const int argc, const char **argv)
 {
 	enum Mode mode;
@@ -332,7 +593,7 @@ int main(const int argc, const char **argv)
 #pragma region Arguments Parsing
 	if (argc < 3)
 	{
-		fprintf(stderr, "Not enough arguments, at least 3 are required. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
+		fprintf(stderr, "Not enough arguments, at least 3 are required. Usage: %s [-H | -C | -O | -S | -OP] -f=filename\n", argv[0]);
 		return -1;
 	}
 	if (strcmp(argv[1], "-H") == 0)
@@ -351,27 +612,36 @@ int main(const int argc, const char **argv)
 	{
 		mode = SHI_TOMASI;
 	}
+	else if (strcmp(argv[1], "-A") == 0)
+	{
+		mode = ALL;
+	}
+	else if (strcmp(argv[1], "-OP") == 0)
+	{
+		mode = OPTICAL;
+	}
 	else
 	{
-		fprintf(stderr, "No execution mode specified. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
+		fprintf(stderr, "No execution mode specified. Usage: %s [-H | -C | -O | -S | -OP] -f=filename\n", argv[0]);
 		return -1;
 	}
 
 	std::string filename = "";
+	std::string filename2 = "";
 	std::string arg = argv[2];
 	if (arg.substr(0, 3) == "-f=")
 	{
 		filename = arg.substr(3);
 		if (filename == "")
 		{
-			fprintf(stderr, "Empty filename. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
+			fprintf(stderr, "Empty filename. Usage: %s [-H | -C | -O | -S | -OP] -f=filename\n", argv[0]);
 			return -1;
 		}
 
 		std::string ext = filename.substr(filename.find_last_of(".") + 1);
 		if (ext != "jpg" && ext != "png" && ext != "mp4")
 		{
-			fprintf(stderr, "Invalid file extension. Only jpg, png and mp4 are supported. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
+			fprintf(stderr, "Invalid file extension. Only jpg, png and mp4 are supported. Usage: %s [-H | -C | -O | -S | -OP] -f=filename\n", argv[0]);
 			return -1;
 		}
 		if (ext == "mp4")
@@ -381,7 +651,7 @@ int main(const int argc, const char **argv)
 	}
 	else
 	{
-		fprintf(stderr, "No file specified. Usage: %s [-H | -C | -O | -S] -f=filename\n", argv[0]);
+		fprintf(stderr, "No file specified. Usage: %s [-H | -C | -O | -S | -OP] -f=filename\n", argv[0]);
 		return -1;
 	}
 
@@ -460,6 +730,34 @@ int main(const int argc, const char **argv)
 				}
 			}
 		}
+		if(mode == OPTICAL){
+			std::string arg = argv[3];
+			if (arg.substr(0, 4) == "-f2=")
+			{
+				filename2 = arg.substr(4);
+				if (filename == "")
+				{
+					fprintf(stderr, "Empty filename. Usage for 2 images: %s -OP -f=filename -f2=filename2\n", argv[0]);
+					return -1;
+				}
+
+				std::string ext = filename.substr(filename.find_last_of(".") + 1);
+				if (ext != "jpg" && ext != "png" && ext != "mp4")
+				{
+					fprintf(stderr, "Invalid file extension. Only jpg, png and mp4 are supported. Usage for 2 images: %s -OP -f=filename -f2=filename2\n", argv[0]);
+					return -1;
+				}
+				if (ext == "mp4")
+				{
+					is_video = true;
+				}
+			}
+			else
+			{
+				fprintf(stderr, "No file specified. Usage for 2 images: %s -OP -f=filename -f2=filename2\n", argv[0]);
+				return -1;
+			}
+		}
 		else
 		{
 			fprintf(stderr, "Too many arguments for the specified mode. Ignoring extra arguments.\n");
@@ -467,16 +765,32 @@ int main(const int argc, const char **argv)
 	}
 #pragma endregion
 #pragma region Driver Code
-
-	if (is_video)
+	if (mode == ALL)
 	{
-		handleVideo(mode, filename, low_threshold, high_threshold);
+		if (is_video)
+		{
+			handleVideo(HARRIS, filename, low_threshold, high_threshold, true);
+		}
+		else
+		{
+			fprintf(stderr, "All mode is only supported for videos. Usage: %s -A -f=filename\n", argv[0]);
+			return -1;
+		}
+	}
+	else if(mode == OPTICAL){
+		opticalNaive(filename,filename2,is_video);
 	}
 	else
 	{
-		handleImage(mode, filename, low_threshold, high_threshold);
+		if (is_video)
+		{
+			handleVideo(mode, filename, low_threshold, high_threshold);
+		}
+		else
+		{
+			handleImage(mode, filename, low_threshold, high_threshold);
+		}
 	}
-
 #pragma endregion
 	return 0;
 }
