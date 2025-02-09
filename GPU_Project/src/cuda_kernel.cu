@@ -1621,7 +1621,6 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
     return treshold;
 }
 
-
 __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
                                        const float *__restrict__ harris2,
                                        int width, int height,
@@ -1630,7 +1629,6 @@ __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
                                        int *d_idx1Mapping, int *d_idx2Mapping,
                                        int *d_mappingCount)
 {
-    // Compute thread position
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -1639,17 +1637,14 @@ __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
 
     int idx = y * width + x;
 
-
-    __shared__ float sharedHarris1[TILE_WIDTH][TILE_WIDTH]; 
-
+    __shared__ float sharedHarris1[TILE_WIDTH][TILE_WIDTH];
 
     int localX = threadIdx.x;
     int localY = threadIdx.y;
 
     sharedHarris1[localY][localX] = harris1[idx];
-    
 
-    __syncthreads(); // Ensure all threads have loaded data
+    __syncthreads();
 
     // Only process if the corner response is significant
     if (sharedHarris1[localY][localX] > threshold)
@@ -1657,7 +1652,6 @@ __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
         float bestMatchDiff = threshold * tolerance;
         int bestMatchIdx = -1;
 
-        // Searching within the window
         for (int j = -window; j <= window; j++)
         {
             int y2 = y + j;

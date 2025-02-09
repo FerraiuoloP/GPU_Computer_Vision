@@ -1,3 +1,4 @@
+#pragma once
 #include <string>
 float *computeGaussianKernel(int filterWidth, float filterSigma);
 void saveImage(int height, int width, float *img, std::string name);
