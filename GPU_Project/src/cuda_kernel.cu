@@ -800,7 +800,7 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
         int idx = y0 * width + x0;
 
         /**
-         * NMS without Interpolation
+         * NMS without Interpolation - Faster but less accurate(jagged edges)
          *
          */
 
@@ -858,7 +858,7 @@ __global__ void lowerBoundCutoffSuppression_sh(float *img_magn_gradient, float *
         // }
 
         /**
-         * NMS with Bilinear Interpolation
+         * NMS with Bilinear Interpolation - Slower but smoother edges
          *
          */
         float curMag = img_magn_gradient_shared[threadIdx.y + 1][threadIdx.x + 1];
@@ -1185,7 +1185,6 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
 
-    // 1. FIXED GRID DIMENSIONS -----------------------------------------------
     // Row convolution grid (handles ROW_THREAD_STEPS elements per thread block)
     const dim3 gridSize_row(
         (width + TILE_WIDTH * ROW_THREAD_STEPS - 1) / (TILE_WIDTH * ROW_THREAD_STEPS),
@@ -1201,29 +1200,15 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
     float *img_temp_d;
     cudaMalloc(&img_temp_d, width * height * sizeof(float));
 
-    // 2. KERNEL COMPATIBILITY CHECK -------------------------------------------
-    const int filter_radius = (kernel_size - 1) / 2;
-    if (filter_radius > ROW_HALO_STEPS * TILE_WIDTH ||
-        filter_radius > COL_HALO_STEPS * TILE_WIDTH)
-    {
-        fprintf(stderr, "Kernel radius too large for halo configuration!\n");
-        cudaFree(img_temp_d);
-        return;
-    }
-    // -------------------------------------------------------------------------
-
-    // Launch row convolution with corrected grid
     rowConvolution<<<gridSize_row, blockSize>>>(img_d, img_temp_d, width, height, kernel_x);
     cudaDeviceSynchronize();
 
-    // Error check
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
     {
         fprintf(stderr, "Error in kernel ROW: %s\n", cudaGetErrorString(err));
     }
 
-    // Launch column convolution with corrected grid
     columnConvolution<<<gridSize_col, blockSize>>>(img_temp_d, img_out_d, width, height, kernel_y);
     cudaDeviceSynchronize();
 
@@ -1250,31 +1235,15 @@ void rgbToGrayKernelWrap(uchar4 *img_d, float *gray_d, int width, int height)
     // Launch kernel
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-
-    // cudaEvent_t start, stop;
-    // checkCuda(cudaEventCreate(&start));
-    // checkCuda(cudaEventCreate(&stop));
-
-    // checkCuda(cudaEventRecord(start));
-
+    // debug
     if (img_d == nullptr || gray_d == nullptr)
     {
         fprintf(stderr, "Error: NULL pointer before kernel launch!\n");
     }
 
     rgbToGrayKernel<<<grid, block>>>(img_d, gray_d, width, height);
-    // checkCuda(cudaEventRecord(stop));
+    cudaDeviceSynchronize();
 
-    // checkCuda(cudaEventSynchronize(stop));
-    // float milliseconds = 0;
-    // checkCuda(cudaEventElapsedTime(&milliseconds, start, stop));
-    // printf("Elapsed time: %f ms\n", milliseconds);
-
-    // cudaFree(img_d);
-    // checkCuda(cudaEventDestroy(start));
-    // checkCuda(cudaEventDestroy(stop));
-
-    checkCuda(cudaDeviceSynchronize());
     // Error checking
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
@@ -1499,7 +1468,6 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
     cudaStreamSynchronize(streams[0]);
     cudaStreamSynchronize(streams[1]);
     cudaStreamSynchronize(streams[2]);
-    // cudaDeviceSynchronize();
 
     // 2. Apply Gaussian blur to Ix2, Iy2, and IxIy
     // applyConvolution<<<gridSize, blockSize, 0, streams[0]>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
@@ -1518,9 +1486,6 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
     // cudaEventSynchronize(stop);
     // cudaEventElapsedTime(&milliseconds, start, stop);
     // printf("Elapsed time for Gaussian blur: %f ms\n", milliseconds);
-
-    // Synchronize streams
-    cudaDeviceSynchronize();
 #pragma endregion
 
 #pragma region 3-5. Computing Harris/ShiTomasi Response
@@ -1560,29 +1525,11 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
 #pragma endregion
 
 #pragma region 7. Finding Max value in Harris response
-    // cudaEventRecord(start);
 
     findMaxReductionSHFL<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
 
-    // cudaEventRecord(stop);
-    // cudaEventSynchronize(stop);
-    // cudaEventElapsedTime(&milliseconds, start, stop);
-    // printf("Elapsed time for Max value Shfl: %f ms\n", milliseconds);
-
-    // debug only
+    // moving max to host so that we can use it for thresholding
     cudaMemcpy(&max_value_f, max_value_d, sizeof(float), cudaMemcpyDeviceToHost);
-
-    // printf("Max value in Harris response Shfl: %f\n", max_value_f);
-
-    // cudaEventRecord(start);
-
-    // findMaxReductionSHRD<<<gridSize, blockSize, sh_mem_size>>>(output_d, max_value_d, width, height);
-
-    // cudaEventRecord(stop);
-    // cudaEventSynchronize(stop);
-    // cudaEventElapsedTime(&milliseconds, start, stop);
-    // printf("Elapsed time for Max value Shrd: %f ms\n", milliseconds);
-    // printf("Max value in Harris response Shrd: %f\n", max_value_f);
 
 #pragma endregion
 

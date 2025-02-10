@@ -4,10 +4,11 @@
 #include <iostream>
 #include <string>
 #include <assert.h>
+// to profile ncu -o otsu2 ./build/main -O -f="input/traffic.jpg"
 
 /**
  * @brief Compute the histogram of the image. For each pixel value, increment the count of the histogram.
- *
+ * Optimized version, approx 4x faster than the non-optimized version.
  * @param image The image to compute the histogram of.
  * @param histogram The histogram to store the pixel values.
  * @param width The width of the image.
@@ -15,15 +16,44 @@
  */
 __global__ void computeHistogram(float *image, int *histogram, int width, int height)
 {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int index = y * width + x;
+    __shared__ int shared_histogram[256];
 
-    if (x < width && y < height)
+    shared_histogram[threadIdx.x] = 0;
+    __syncthreads();
+
+    const int total_pixels = width * height;
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // each thread processes multiple pixels to reduce total blocks
+    for (int i = tid; i < total_pixels; i += blockDim.x * gridDim.x)
     {
-        atomicAdd(&histogram[(int)image[index]], 1);
+        int x = i % width;
+        int y = i / width;
+        float pixel = image[y * width + x];
+        // casting pixel to bin number
+        int bin = (int)pixel;
+        atomicAdd(&shared_histogram[bin], 1);
+    }
+    __syncthreads();
+
+    // merging shared histogram to global histogram
+    for (int i = threadIdx.x; i < 256; i += blockDim.x)
+    {
+        atomicAdd(&histogram[i], shared_histogram[i]); // Global atomic (fewer collisions)
     }
 }
+// Non optimized version
+// __global__ void computeHistogram(float *image, int *histogram, int width, int height)
+// {
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+//     int y = blockIdx.y * blockDim.y + threadIdx.y;
+//     int index = y * width + x;
+
+//     if (x < width && y < height)
+//     {
+//         atomicAdd(&histogram[(int)image[index]], 1);
+//     }
+// }
 /**
  * @brief Compute the probability for each pixel value(0-255) in the histogram, by dividing the histogram value by the total number of pixels.
  *
@@ -91,26 +121,36 @@ __device__ float computeMeanOrWeights(float *histogram, int start, int threshold
 
     Il threshold migliore è quello con Sigma^2_B massima
  */
-__global__ void otsuThresholdKernel(float *image, int *histogram, float *probabilities, int width, int height, int *sigma2_b)
+__global__ void otsuThresholdKernel(float *image, float *probabilities, int width, int height, int *sigma2_b)
 {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-    int index = y * width + x;
+    // int x = blockIdx.x * blockDim.x + threadIdx.x;
+    // int y = blockIdx.y * blockDim.y + threadIdx.y;
+    // int index = y * width + x;
+    int index = threadIdx.x;
 
-    if (x < width && y < height && index < 255)
-    {
+    __shared__ float shared_probabilities[256];
+    shared_probabilities[threadIdx.x] = probabilities[threadIdx.x];
+    __syncthreads();
 
-        float w0 = computeMeanOrWeights(probabilities, 0, index, 0, 0);
-        float w1 = 1 - w0;
+    // it' s useless this check since we are always working with 256 threads for a 256x1 histogram
+    // if (x < width && y < height && index < 255)
+    // {
 
-        float mu0 = computeMeanOrWeights(probabilities, 0, index, 1, w0);
-        float mu1 = computeMeanOrWeights(probabilities, index + 1, 255, 1, w1);
+    float w0 = computeMeanOrWeights(shared_probabilities, 0, index, 0, 0);
+    float w1 = 1 - w0;
 
-        float var = w0 * w1 * ((mu0 - mu1) * (mu0 - mu1));
+    float mu0 = computeMeanOrWeights(shared_probabilities, 0, index, 1, w0);
+    float mu1 = computeMeanOrWeights(shared_probabilities, index + 1, 255, 1, w1);
 
-        // Compute the Sigma^2_B for that threshold.
-        sigma2_b[index] = (int)var;
-    }
+    // float w0 = computeMeanOrWeights(probabilities, 0, index, 0, 0);
+    // float mu0 = computeMeanOrWeights(probabilities, 0, index, 1, w0);
+    // float mu1 = computeMeanOrWeights(probabilities, index + 1, 255, 1, w1);
+
+    float var = w0 * w1 * ((mu0 - mu1) * (mu0 - mu1));
+
+    // Compute the Sigma^2_B for that threshold.
+    sigma2_b[index] = (int)var;
+    // }
 }
 /**
  * @brief Find the maximum value in the array of sigma2_b. Shared-memory based.
@@ -152,6 +192,7 @@ __global__ void findMaxReductionSHRD(int *sigma2_b, int *max_threshold, int widt
  */
 __device__ int warpReduceMax(int val)
 {
+#pragma unroll
     for (int offset = warpSize / 2; offset > 0; offset /= 2)
     {
         val = max(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
@@ -204,6 +245,7 @@ __global__ void findMaxReductionSHFL(int *sigma2_b, int *max_threshold)
     int local_max = -INT32_MAX;
     int local_max_idx = -1;
 
+#pragma unroll
     for (int i = x; i < 256; i += stride)
     {
         if (sigma2_b[i] > local_max)
@@ -281,8 +323,11 @@ void binarizeImgWrapper(unsigned char *img_gray_h, float *img_d, int width, int 
  */
 int otsuThreshold(float *image, int width, int height)
 {
-    const dim3 blockSize(16, 16);
-    const dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
+    // const dim3 blockSize(16, 16);
+    // const dim3 gridSize((width + blockSize.x - 1) / blockSize.x, (height + blockSize.y - 1) / blockSize.y);
+    const dim3 blockSize(256, 1);
+    const dim3 gridSize((width * height + blockSize.x - 1) / blockSize.x, 1);
+    // 256x1 thread since we only work with a 256x1 histogram
     const dim3 gridSize2(1, 1);
     const dim3 blockSize2(256, 1);
     // float milliseconds = 0;
@@ -302,6 +347,7 @@ int otsuThreshold(float *image, int width, int height)
     cudaMalloc(&sigma2_b, 256 * sizeof(int));
 
     // histogram
+
     computeHistogram<<<gridSize, blockSize>>>(image, histogram, width, height);
 
     // probabilities
@@ -309,7 +355,7 @@ int otsuThreshold(float *image, int width, int height)
 
     // sigma2b for each threshold
     // cudaEventRecord(start);
-    otsuThresholdKernel<<<gridSize2, blockSize2>>>(image, histogram, probabilities, width, height, sigma2_b);
+    otsuThresholdKernel<<<gridSize2, blockSize2>>>(image, probabilities, width, height, sigma2_b);
     // cudaEventRecord(stop);
 
     // cudaEventSynchronize(stop);
