@@ -227,10 +227,10 @@ __global__ void convolutionGPU(float *result_d, float *data_d, int width, int he
     if (x0 < width && y0 < height)
     {
         float sum = 0.0f;
-#pragma unroll
+#pragma unroll 3
         for (int i = -filter_radius; i <= filter_radius; ++i)
         {
-#pragma unroll
+#pragma unroll 3
             for (int j = -filter_radius; j <= filter_radius; ++j)
             {
                 int shX = threadIdx.x + filter_radius + j;
