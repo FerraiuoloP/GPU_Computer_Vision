@@ -33,7 +33,7 @@ make run-all ARGS="-f=input/traffic.jpg"
      - **-S:** Shi-Tomasi Corner Detector
      - **-C:** Canny Edge Detector
      - **-O:** Otsu's thresholding for image binarization
-     - **-A:** Process all the algorithms at once using multi-threading.
+     - **-OP:** Simple motion detection demo
 2. **Input:** 
      - **-f:** path to the input image or video
 3. **Additional arguments:**
