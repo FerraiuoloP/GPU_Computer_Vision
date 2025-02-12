@@ -4,7 +4,7 @@
 #include <iostream>
 #include <string>
 #include <assert.h>
-// to profile ncu -o otsu2 ./build/main -O -f="input/traffic.jpg"
+
 
 /**
  * @brief Compute the histogram of the image. For each pixel value, increment the count of the histogram.

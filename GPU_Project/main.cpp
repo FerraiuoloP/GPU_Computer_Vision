@@ -1,4 +1,3 @@
-// nvcc -std=c++14 -ccbin g++ main.cpp src/cuda_kernel.cu -o main `pkg-config --cflags --libs opencv4`
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
@@ -83,11 +82,11 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 	int width = img.cols;
 	int height = img.rows;
 	int channels = img.channels();
-	printf("Channels: %d\n", channels);
+	// printf("Channels: %d\n", channels);
 	size_t img_size_h = width * height * channels * sizeof(unsigned char);
 	size_t img_gray_size_h = width * height * sizeof(float);
 
-	printf("Image size: %d x %d \n", width, height);
+	// printf("Image size: %d x %d \n", width, height);
 
 	// device variable declarations
 	uchar4 *img_d;
@@ -215,7 +214,7 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
 	}
 	auto end = std::chrono::high_resolution_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-	cout << "Execution time: " << duration.count() << "ms" << endl;
+	// cout << "Execution time: " << duration.count() << "ms" << endl;
 
 	// Showing the result
 	if (mode != CANNY_GUI)
@@ -278,7 +277,7 @@ void handleImage(enum Mode mode, std::string filename, int low_threshold, int hi
  * @param low_threshold Low threshold for Canny Edge Detection Manual mode
  * @param high_threshold  High threshold for Canny Edge Detection Manual mode
  */
-void handleVideo(enum Mode mode, std::string filename, int low_threshold, int high_threshold, bool is_all_thread = false)
+void handleVideo(enum Mode mode, std::string filename, int low_threshold, int high_threshold)
 {
 	cv::VideoCapture cap(filename);
 	if (!cap.isOpened())
@@ -286,8 +285,7 @@ void handleVideo(enum Mode mode, std::string filename, int low_threshold, int hi
 		std::cerr << "Error: Unable to load video." << std::endl;
 		return;
 	}
-	int desired_fps = 60;
-	int target_frame_time = 1000 / desired_fps;
+
 	int debug = 0;
 	while (cap.isOpened())
 	{
@@ -302,12 +300,8 @@ void handleVideo(enum Mode mode, std::string filename, int low_threshold, int hi
 		handleImage(mode, filename, low_threshold, high_threshold, true, img);
 		// free(img.data);
 
-		int64 end_time = cv::getTickCount();
-		double elapsed_time_ms = (end_time - start_time) * 1000 / cv::getTickFrequency();
-		cout << "FPS: " << 1000 / elapsed_time_ms << endl;
 
-		int delay = std::max(1, target_frame_time - static_cast<int>(elapsed_time_ms));
-		if (cv::waitKey(delay) == 27) // 27=esc key
+		if (cv::waitKey(1)==27) // 27=esc key
 		{
 			break;
 		}
@@ -318,6 +312,15 @@ void handleVideo(enum Mode mode, std::string filename, int low_threshold, int hi
 		// }
 	}
 }
+
+/**
+ * @brief This is just a simple naive demo to show a possible usage of harris corner detection, as such it is not optimized. \
+ * Treshold and tollerance values in the mapCommonKernelWrap should be adjusted according to the video or images used. \
+ *
+ * @param filename Video filename
+ * @param filename2 Video filename 2 in case of images
+ * @param video  Flag to indicate if we are working with a video or images
+ */
 
 void opticalNaive(std::string filename, std::string filename2, bool video)
 {
@@ -342,7 +345,7 @@ void opticalNaive(std::string filename, std::string filename2, bool video)
 		prev_frame = cv::imread(filename, cv::IMREAD_COLOR);
 		next_frame = cv::imread(filename2, cv::IMREAD_COLOR);
 	}
-	cv::Mat img_display = next_frame.clone();
+
 
 	cv::cvtColor(prev_frame, prev_frame, cv::COLOR_BGR2RGBA);
 	cv::cvtColor(next_frame, next_frame, cv::COLOR_BGR2RGBA);
@@ -354,7 +357,7 @@ void opticalNaive(std::string filename, std::string filename2, bool video)
 	int height = prev_frame.rows;
 	int channels = prev_frame.channels();
 	float treshold = 0.1;
-	printf("Channels: %d\n", channels);
+
 	size_t img_size_h = width * height * channels * sizeof(unsigned char);
 	size_t img_gray_size_h = width * height * sizeof(float);
 
@@ -425,7 +428,7 @@ void opticalNaive(std::string filename, std::string filename2, bool video)
 			{
 				break;
 			}
-			img_display = next_frame.clone();
+			
 			cv::cvtColor(next_frame, next_frame, cv::COLOR_BGR2RGBA);
 			cv::cvtColor(prev_frame, prev_frame, cv::COLOR_BGR2RGBA);
 
@@ -460,12 +463,12 @@ void opticalNaive(std::string filename, std::string filename2, bool video)
 			harrisMainKernelWrap((uchar4 *)prev_frame.data, img_d, img_sobel_x_d, img_sobel_y_d, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false, harris_map1_d);
 		treshold = harrisMainKernelWrap((uchar4 *)next_frame.data, img_d_2, img_sobel_x_d_2, img_sobel_y_d_2, width, height, K, ALPHA, gaussian_kernel_d, FILTER_WIDTH, false, harris_map2_d);
 
+		//TOLLERANCE, WINDOW
 		// 0.001,200 for 1-opt and 2-opt
 		// 0.1,5 for cars
 		// 0.5,5 for arrows
-		mappingCount = mapCommonKernelWrap(harris_map1_d, harris_map2_d, width, height, treshold, 0.1, 5, idx1Mapping_d, idx2Mapping_d);
-
-		cudaDeviceSynchronize();
+	
+		mappingCount = mapCommonKernelWrap(harris_map1_d, harris_map2_d, width, height, treshold, 0.5, 5, idx1Mapping_d, idx2Mapping_d);
 
 		cudaMemcpy(idx1Mapping_h, idx1Mapping_d, width * height * sizeof(int), cudaMemcpyDeviceToHost);
 		cudaMemcpy(idx2Mapping_h, idx2Mapping_d, width * height * sizeof(int), cudaMemcpyDeviceToHost);
@@ -501,7 +504,7 @@ void opticalNaive(std::string filename, std::string filename2, bool video)
 			sumVec.y /= validCount;
 
 			cv::Point center(next_frame.cols / 2, next_frame.rows / 2);
-			cv::Point avgEnd = center + cv::Point(sumVec.x * 20, sumVec.y * 20);
+			cv::Point avgEnd = center + cv::Point(sumVec.x * 20, sumVec.y * 20); //arrow scale factor
 
 			// clamp to image size
 			avgEnd.x = std::max(0, std::min(avgEnd.x, next_frame.cols - 1));

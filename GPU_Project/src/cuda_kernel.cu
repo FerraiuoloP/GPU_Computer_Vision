@@ -381,7 +381,7 @@ __global__ void columnConvolution(float *data_d, float *result_d, int width, int
         }
     }
 }
-// Simple not-optimized convolution kernel
+// Simple not-optimized convolution kernel (no longer used)
 __global__ void applyConvolution(float *img_d, float *img_out_d, int width, int height, float *kernel, int kernel_size)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1007,7 +1007,7 @@ __global__ void doubleThresholdSuppression(float *LBCOS_img, float *two_th_supr_
         }
     }
 }
-// /**
+/**
 //  * @brief Compute the hysteresis thresholding. If the pixel is a weak edge and has a strong edge neighbour, it is marked as a strong edge.
 //  * @cite https://en.wikipedia.org/wiki/Canny_edge_detector#Edge_tracking_by_hysteresis for further details.
 //  * @param TTS_img Two-threshold suppressed image
@@ -1185,17 +1185,17 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
 {
     const dim3 blockSize(TILE_WIDTH, TILE_WIDTH);
 
-    // Row convolution grid (handles ROW_THREAD_STEPS elements per thread block)
+
     const dim3 gridSize_row(
         (width + TILE_WIDTH * ROW_THREAD_STEPS - 1) / (TILE_WIDTH * ROW_THREAD_STEPS),
-        (height + TILE_WIDTH - 1) / TILE_WIDTH // Ceiling division for height
+        (height + TILE_WIDTH - 1) / TILE_WIDTH 
     );
 
-    // Column convolution grid (handles COL_THREAD_STEPS elements per thread block)
+   
     const dim3 gridSize_col(
-        (width + TILE_WIDTH - 1) / TILE_WIDTH, // Ceiling division for width
+        (width + TILE_WIDTH - 1) / TILE_WIDTH, 
         (height + TILE_WIDTH * COL_THREAD_STEPS - 1) / (TILE_WIDTH * COL_THREAD_STEPS));
-    // -------------------------------------------------------------------------
+    
 
     float *img_temp_d;
     cudaMalloc(&img_temp_d, width * height * sizeof(float));
@@ -1212,7 +1212,7 @@ void separableConvolutionKernelWrap(float *img_d, float *img_out_d, int width, i
     columnConvolution<<<gridSize_col, blockSize>>>(img_temp_d, img_out_d, width, height, kernel_y);
     cudaDeviceSynchronize();
 
-    // Error check
+
     err = cudaGetLastError();
     if (err != cudaSuccess)
     {
@@ -1277,7 +1277,7 @@ void convolutionGPUWrap(float *result_d, float *data_d, int data_w, int data_h, 
     int sharedWidth = TILE_WIDTH + 2 * (kernel_size / 2);
     // sharedMemSize *= sharedMemSize * sharedMemSize;
 
-    // applyConvolution<<<dimGrid, blockSize>>>(data_d, result_d, data_w, data_h, d_kernel, kernel_size);
+    
     convolutionGPU<<<dimGrid, blockSize, (sharedWidth * sharedWidth) * sizeof(float)>>>(result_d, data_d, data_w, data_h, d_kernel, kernel_size, sharedWidth);
     // cudaEventRecord(stop);
 
@@ -1341,8 +1341,6 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
     // cv::Mat displayImage1;
     // printImage.convertTo(displayImage1, CV_8UC1, 1.0);
     // cv::imwrite("debug/combined_gradients_cuda.jpg", displayImage1);
-    // save it to a file
-
     cudaDeviceSynchronize();
     // 2. Lower bound cutoff suppression to suppress non-maximum pixels with respect to the gradient direction
     // cudaEventRecord(start);
@@ -1419,6 +1417,8 @@ void cannyMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x,
  * @param gaussian_kernel Gaussian kernel
  * @param g_kernel_size Gaussian kernel size
  * @param shi_tomasi Flag to enable Shi-Tomasi corner detection
+ * @param harris_map_d Harris map output
+ * @return treshold value
  */
 float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_x, float *sobel_y, int width, int height, float k, float alpha, float *gaussian_kernel, int g_kernel_size, bool shi_tomasi, float *harris_map_d)
 {
@@ -1470,16 +1470,11 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
     cudaStreamSynchronize(streams[2]);
 
     // 2. Apply Gaussian blur to Ix2, Iy2, and IxIy
-    // applyConvolution<<<gridSize, blockSize, 0, streams[0]>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
-    // applyConvolution<<<gridSize, blockSize, 0, streams[1]>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
-    // applyConvolution<<<gridSize, blockSize, 0, streams[0]>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
+
 
     // cudaEventRecord(start);
-    // applyConvolution<<<gridSize, blockSize>>>(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
     convolutionGPUWrap(Ix2_d, Ix2_d, width, height, gaussian_kernel, g_kernel_size);
-    // applyConvolution<<<gridSize, blockSize>>>(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
     convolutionGPUWrap(Iy2_d, Iy2_d, width, height, gaussian_kernel, g_kernel_size);
-    // applyConvolution<<<gridSize, blockSize>>>(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
     convolutionGPUWrap(IxIy_d, IxIy_d, width, height, gaussian_kernel, g_kernel_size);
 
     // cudaEventRecord(stop);
@@ -1568,13 +1563,29 @@ float harrisMainKernelWrap(uchar4 *img_data_h, uchar4 *img_data_d, float *sobel_
     return treshold;
 }
 
+
+/**
+ * @brief  Kernel for naive demo of motion detection
+ * 
+ * @param harris1 Harris map of first frame
+ * @param harris2 Harris map of second frame
+ * @param width width of the images
+ * @param height height of the images
+ * @param threshold threshold to consider a corner
+ * @param tollerance tollerance (to lower the threshold)
+ * @param window window size to search for matching corners
+ * @param idx1Mapping_d mapping of corners from first frame
+ * @param idx2Mapping_d mapping of corners from second frame
+ * @param mappingCount_d number of common corners
+ */
+
 __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
                                        const float *__restrict__ harris2,
                                        int width, int height,
                                        float threshold, float tolerance,
                                        int window,
-                                       int *d_idx1Mapping, int *d_idx2Mapping,
-                                       int *d_mappingCount)
+                                       int *idx1Mapping_d, int *idx2Mapping_d,
+                                       int *mappingCount_d)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1624,13 +1635,27 @@ __global__ void mapCommonCornersKernel(const float *__restrict__ harris1,
 
         if (bestMatchIdx != -1)
         {
-            int pos = atomicAdd(d_mappingCount, 1);
-            d_idx1Mapping[pos] = idx;
-            d_idx2Mapping[pos] = bestMatchIdx;
+            int pos = atomicAdd(mappingCount_d, 1);
+            idx1Mapping_d[pos] = idx;
+            idx2Mapping_d[pos] = bestMatchIdx;
         }
     }
 }
 
+/**
+ * @brief Wrapper for the naive demo of motion detection
+ * 
+ * @param harris1 Harris map of first frame
+ * @param harris2 Harris map of second frame
+ * @param width width of the images
+ * @param height height of the images
+ * @param threshold threshold to consider a corner
+ * @param tollerance tollerance (to lower the threshold)
+ * @param window window size to search for matching corners
+ * @param idx1Mapping_d mapping of corners from first frame
+ * @param idx2Mapping_d mapping of corners from second frame
+ * @return number of common corners
+ */
 int mapCommonKernelWrap(const float *harris1,
                         const float *harris2,
                         int width,
@@ -1638,8 +1663,8 @@ int mapCommonKernelWrap(const float *harris1,
                         float threshold,
                         const float tollerance,
                         int window,
-                        int *d_idx1Mapping,
-                        int *d_idx2Mapping)
+                        int *idx1Mapping_d,
+                        int *idx2Mapping_d)
 {
     dim3 block(TILE_WIDTH, TILE_WIDTH);
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
@@ -1648,7 +1673,7 @@ int mapCommonKernelWrap(const float *harris1,
     cudaMalloc(&mappingCount_d, sizeof(int));
     cudaMemset(mappingCount_d, 0, sizeof(int));
 
-    mapCommonCornersKernel<<<grid, block>>>(harris1, harris2, width, height, threshold, tollerance, window, d_idx1Mapping, d_idx2Mapping, mappingCount_d);
+    mapCommonCornersKernel<<<grid, block>>>(harris1, harris2, width, height, threshold, tollerance, window, idx1Mapping_d, idx2Mapping_d, mappingCount_d);
     cudaDeviceSynchronize();
 
     int mappingCount_h;
